@@ -1,0 +1,115 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import {
+	DEFAULT_THRESHOLD_TOKENS,
+	loadPolicy,
+	parsePolicy,
+	resolveThreshold,
+} from "../extensions/auto-compact/config.js";
+
+const examplePolicy = parsePolicy({
+	defaultThresholdTokens: 200_000,
+	rules: [
+		{
+			name: "specific Opus exception",
+			provider: "anthropic",
+			model: "claude-opus-4-8",
+			thresholdTokens: 275_000,
+		},
+		{
+			name: "Anthropic 4.6 and earlier",
+			provider: "anthropic",
+			modelPattern: "^claude-",
+			version: { lte: "4.6" },
+			thresholdTokens: 120_000,
+		},
+		{
+			name: "GPT 5.5 and newer",
+			modelPattern: "^gpt-",
+			version: { gte: "5.5" },
+			thresholdTokens: 250_000,
+		},
+	],
+});
+
+test("uses the first matching rule", () => {
+	assert.deepEqual(
+		resolveThreshold(examplePolicy, {
+			api: "anthropic-messages",
+			provider: "anthropic",
+			id: "claude-opus-4-8",
+		}),
+		{ thresholdTokens: 275_000, source: 'rule "specific Opus exception"' },
+	);
+});
+
+test("matches Anthropic model versions through 4.6", () => {
+	for (const id of ["claude-3-5-sonnet", "claude-sonnet-4-5", "claude-opus-4-6"]) {
+		assert.equal(
+			resolveThreshold(examplePolicy, { api: "anthropic-messages", provider: "anthropic", id }).thresholdTokens,
+			120_000,
+		);
+	}
+	assert.equal(
+		resolveThreshold(examplePolicy, {
+			api: "anthropic-messages",
+			provider: "anthropic",
+			id: "claude-sonnet-4-7",
+		}).thresholdTokens,
+		DEFAULT_THRESHOLD_TOKENS,
+	);
+});
+
+test("matches GPT 5.5 and newer independently of provider", () => {
+	assert.equal(
+		resolveThreshold(examplePolicy, {
+			api: "bedrock-converse-stream",
+			provider: "bedrock",
+			id: "gpt-5.6-luna",
+		}).thresholdTokens,
+		250_000,
+	);
+	assert.equal(
+		resolveThreshold(examplePolicy, {
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			id: "gpt-5.5",
+		}).thresholdTokens,
+		250_000,
+	);
+	assert.equal(
+		resolveThreshold(examplePolicy, {
+			api: "openai-responses",
+			provider: "openai",
+			id: "gpt-5.4",
+		}).thresholdTokens,
+		DEFAULT_THRESHOLD_TOKENS,
+	);
+});
+
+test("uses the process test override ahead of configured rules", () => {
+	assert.deepEqual(
+		resolveThreshold(
+			examplePolicy,
+			{ api: "anthropic-messages", provider: "anthropic", id: "claude-opus-4-8" },
+			1,
+		),
+		{ thresholdTokens: 1, source: "test override" },
+	);
+});
+
+test("returns defaults when the user configuration file is absent", () => {
+	const policy = loadPolicy(join(tmpdir(), `missing-auto-compact-${process.pid}.json`));
+	assert.equal(policy.defaultThresholdTokens, DEFAULT_THRESHOLD_TOKENS);
+	assert.deepEqual(policy.rules, []);
+	assert.equal(policy.error, undefined);
+});
+
+test("rejects malformed configuration", () => {
+	assert.throws(() => parsePolicy({ rules: [{ thresholdTokens: 1, modelPattern: "[" }] }), /valid regular expression/);
+	assert.throws(() => parsePolicy({ rules: [{ thresholdTokens: 1, version: { gte: "5" } }] }), /major\.minor/);
+	assert.throws(() => parsePolicy({ rules: [{ thresholdTokens: -1 }] }), /non-negative integer/);
+	assert.throws(() => parsePolicy({ unexpected: true }), /unknown field/);
+});

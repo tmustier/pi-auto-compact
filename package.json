@@ -1,0 +1,47 @@
+{
+  "name": "pi-auto-compact",
+  "version": "0.1.0",
+  "description": "Configurable proactive native compaction for Pi",
+  "type": "module",
+  "license": "MIT",
+  "author": "Thomas Mustier",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tmustier/pi-auto-compact.git"
+  },
+  "bugs": {
+    "url": "https://github.com/tmustier/pi-auto-compact/issues"
+  },
+  "homepage": "https://github.com/tmustier/pi-auto-compact#readme",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "llm",
+    "compaction",
+    "context-window"
+  ],
+  "files": [
+    "extensions",
+    "config.example.json"
+  ],
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "0.80.7",
+    "@earendil-works/pi-coding-agent": "0.80.7",
+    "@types/node": "22.19.19",
+    "tsx": "4.22.1",
+    "typescript": "5.9.3"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/auto-compact/index.ts"
+    ]
+  }
+}
