@@ -9,8 +9,10 @@ The default threshold is 200,000 estimated tokens. You can override it by API, p
 Install the public Git package:
 
 ```sh
-pi install git:github.com/tmustier/pi-auto-compact
+pi install git:github.com/tmustier/pi-auto-compact@v0.1.0
 ```
+
+Omit `@v0.1.0` if you want to track the latest commit on `main`.
 
 Restart Pi or run `/reload`. Use `/auto-compact` to check the loaded policy and current model threshold.
 
