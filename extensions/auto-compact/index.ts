@@ -69,10 +69,14 @@ function isArmedActiveRequest(model: Model<Api>, context: Context, request: Arme
 	return request.toolCallIds.every((toolCallId) => includedToolResults.has(toolCallId));
 }
 
-function syntheticOverflow(model: Model<Api>, tokens: number, threshold: number) {
+export function formatOverflowError(tokens: number, threshold: number, configPath: string): string {
 	const estimatedTokens = tokens < 1_000 ? tokens.toString() : `${Math.round(tokens / 1_000).toLocaleString("en-GB")}k`;
 	const thresholdTokens =
 		threshold < 1_000 ? threshold.toString() : `${Math.round(threshold / 1_000).toLocaleString("en-GB")}k`;
+	return `auto-compaction token limit exceeded (est. ${estimatedTokens} > ${thresholdTokens} threshold). Configure auto-compact in ${JSON.stringify(configPath)}, then run /reload.`;
+}
+
+function syntheticOverflow(model: Model<Api>, tokens: number, threshold: number, configPath: string) {
 	const message: AssistantMessage = {
 		role: "assistant",
 		content: [],
@@ -81,7 +85,7 @@ function syntheticOverflow(model: Model<Api>, tokens: number, threshold: number)
 		model: model.id,
 		usage: ZERO_USAGE,
 		stopReason: "error",
-		errorMessage: `auto-compaction token limit exceeded (est. ${estimatedTokens} > ${thresholdTokens} threshold). To configure it, ask Pi to modify the "auto-compact" extension.`,
+		errorMessage: formatOverflowError(tokens, threshold, configPath),
 		timestamp: Date.now(),
 	};
 	const stream = createAssistantMessageEventStream();
@@ -130,7 +134,7 @@ export default function autoCompact(pi: ExtensionAPI) {
 		armed = undefined;
 		interceptionCount += 1;
 		syntheticAwaitingCompaction = true;
-		return syntheticOverflow(model, request.tokens, request.threshold);
+		return syntheticOverflow(model, request.tokens, request.threshold, policy.configPath);
 	}
 
 	function installProviderWrapper(api: Api, force = false): boolean {

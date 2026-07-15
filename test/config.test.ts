@@ -8,6 +8,7 @@ import {
 	parsePolicy,
 	resolveThreshold,
 } from "../extensions/auto-compact/config.js";
+import { formatOverflowError } from "../extensions/auto-compact/index.js";
 
 const examplePolicy = parsePolicy({
 	defaultThresholdTokens: 200_000,
@@ -105,6 +106,13 @@ test("returns defaults when the user configuration file is absent", () => {
 	assert.equal(policy.defaultThresholdTokens, DEFAULT_THRESHOLD_TOKENS);
 	assert.deepEqual(policy.rules, []);
 	assert.equal(policy.error, undefined);
+});
+
+test("the overflow error directs users to configuration", () => {
+	assert.equal(
+		formatOverflowError(203_400, 200_000, "/tmp/auto-compact.json"),
+		'auto-compaction token limit exceeded (est. 203k > 200k threshold). Configure auto-compact in "/tmp/auto-compact.json", then run /reload.',
+	);
 });
 
 test("rejects malformed configuration", () => {
