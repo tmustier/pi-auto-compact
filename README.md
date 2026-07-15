@@ -9,10 +9,10 @@ The default threshold is 200,000 estimated tokens. You can override it by API, p
 Install the public Git package:
 
 ```sh
-pi install git:github.com/tmustier/pi-auto-compact@v0.1.0
+pi install git:github.com/tmustier/pi-auto-compact@v0.1.1
 ```
 
-Omit `@v0.1.0` if you want to track the latest commit on `main`.
+Omit `@v0.1.1` if you want to track the latest commit on `main`.
 
 Restart Pi or run `/reload`. Use `/auto-compact` to check the loaded policy and current model threshold.
 
@@ -119,7 +119,7 @@ The interception checks the API, provider, model and completed tool result IDs. 
 The visible synthetic error looks like this:
 
 ```text
-auto-compaction token limit exceeded (est. 203k > 200k threshold). To configure it, ask Pi to modify the "auto-compact" extension.
+auto-compaction token limit exceeded (est. 203k > 200k threshold). Configure auto-compact in "/home/you/.pi/agent/auto-compact.json", then run /reload.
 ```
 
 Pi recognises `token limit exceeded` as context overflow. It saves the error for history, removes it from active context, persists compaction and continues from the retained tool result.
