@@ -2,20 +2,15 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import {
 	createAssistantMessageEventStream,
 	getApiProvider,
-	getApiProviders,
-	registerApiProvider,
 	type Api,
 	type AssistantMessage,
 	type Context,
 	type Model,
-	type SimpleStreamOptions,
-	type StreamOptions,
 } from "@earendil-works/pi-ai/compat";
 import { loadPolicy, resolveThreshold, type ModelIdentity } from "./config.js";
 import { registerPolicyEvents } from "./policy-events.js";
 
 const TEST_THRESHOLD_ENV = "PI_AUTO_COMPACT_TEST_THRESHOLD";
-const PROVIDER_WRAPPER_MARK = Symbol.for("tmustier.pi.auto-compact.provider-wrapper");
 
 const ZERO_USAGE = {
 	input: 0,
@@ -32,13 +27,7 @@ const ZERO_USAGE = {
 	},
 };
 
-type ApiProvider = NonNullable<ReturnType<typeof getApiProvider>>;
-type MarkedStream = ApiProvider["stream"] & {
-	[PROVIDER_WRAPPER_MARK]?: ApiProvider;
-};
-type MarkedSimpleStream = ApiProvider["streamSimple"] & {
-	[PROVIDER_WRAPPER_MARK]?: ApiProvider;
-};
+type RuntimeProviderStream = NonNullable<Parameters<ExtensionAPI["registerProvider"]>[1]["streamSimple"]>;
 
 type ArmedRequest = {
 	api: Api;
@@ -95,14 +84,6 @@ function syntheticOverflow(model: Model<Api>, tokens: number, threshold: number,
 	return stream;
 }
 
-function unwrapProvider(provider: ApiProvider): ApiProvider {
-	return (
-		(provider.streamSimple as MarkedSimpleStream)[PROVIDER_WRAPPER_MARK] ??
-		(provider.stream as MarkedStream)[PROVIDER_WRAPPER_MARK] ??
-		provider
-	);
-}
-
 function modelIdentity(model: Model<Api>): ModelIdentity {
 	return { api: model.api, provider: model.provider, id: model.id };
 }
@@ -121,6 +102,7 @@ export default function autoCompact(pi: ExtensionAPI) {
 	let wrappedRequestCount = 0;
 	let armedRequestMismatchCount = 0;
 	let lastToolTurn = "none";
+	const installedProviders = new Map<string, Api>();
 	const unregisterPolicyEvents = registerPolicyEvents(pi, policy, testThreshold);
 
 	function maybeIntercept(model: Model<Api>, context: Context) {
@@ -139,58 +121,36 @@ export default function autoCompact(pi: ExtensionAPI) {
 		return syntheticOverflow(model, request.tokens, request.threshold, policy.configPath);
 	}
 
-	function installProviderWrapper(api: Api, force = false): boolean {
-		const registered = getApiProvider(api);
-		if (!registered) {
-			lastInstallError = `No registered API provider for: ${api}`;
+	function installProviderWrapper(model: Model<Api>): boolean {
+		const installedApi = installedProviders.get(model.provider);
+		if (installedApi === model.api) return true;
+
+		const upstream = getApiProvider(model.api);
+		if (!upstream) {
+			lastInstallError = `No registered API provider for: ${model.api}`;
 			return false;
 		}
-		const isAlreadyWrapped =
-			(registered.stream as MarkedStream)[PROVIDER_WRAPPER_MARK] !== undefined ||
-			(registered.streamSimple as MarkedSimpleStream)[PROVIDER_WRAPPER_MARK] !== undefined;
-		if (isAlreadyWrapped && !force) return true;
 
-		const upstream = unwrapProvider(registered);
-		const stream: ApiProvider["stream"] = (
-			model: Model<Api>,
-			context: Context,
-			options?: StreamOptions,
-		) => maybeIntercept(model, context) ?? upstream.stream(model, context, options);
-		const streamSimple: ApiProvider["streamSimple"] = (
-			model: Model<Api>,
-			context: Context,
-			options?: SimpleStreamOptions,
-		) => maybeIntercept(model, context) ?? upstream.streamSimple(model, context, options);
+		const streamSimple: RuntimeProviderStream = (requestModel, context, options) =>
+			maybeIntercept(requestModel, context) ?? upstream.streamSimple(requestModel, context, options);
 
-		registerApiProvider({ api, stream, streamSimple }, "auto-compact");
-		// registerApiProvider adds API-checking outer functions. Mark those returned
-		// functions, not the inner callbacks above, so reloads can detect and unwrap us.
-		const installed = getApiProvider(api);
-		if (!installed) {
-			lastInstallError = `Provider wrapper registration disappeared for: ${api}`;
+		try {
+			// Pi 0.80.8 routes requests through ModelRuntime instead of the compat
+			// API registry. A provider-level stream overlay reaches that live path
+			// while preserving the built-in provider's models and authentication.
+			pi.registerProvider(model.provider, { api: model.api, streamSimple });
+			installedProviders.set(model.provider, model.api);
+			installCount += 1;
+			lastInstallError = undefined;
+			return true;
+		} catch (error) {
+			lastInstallError = error instanceof Error ? error.message : String(error);
 			return false;
 		}
-		(installed.stream as MarkedStream)[PROVIDER_WRAPPER_MARK] = upstream;
-		(installed.streamSimple as MarkedSimpleStream)[PROVIDER_WRAPPER_MARK] = upstream;
-		installCount += 1;
-		lastInstallError = undefined;
-		return true;
 	}
 
 	function clearArmedState(): void {
 		armed = undefined;
-	}
-
-	function wrapperCounts(): { active: number; registered: number } {
-		const providers = getApiProviders();
-		let active = 0;
-		for (const provider of providers) {
-			const wrapped =
-				(provider.stream as MarkedStream)[PROVIDER_WRAPPER_MARK] !== undefined ||
-				(provider.streamSimple as MarkedSimpleStream)[PROVIDER_WRAPPER_MARK] !== undefined;
-			if (wrapped) active += 1;
-		}
-		return { active, registered: providers.length };
 	}
 
 	function status(ctx: ExtensionContext): string {
@@ -208,19 +168,15 @@ export default function autoCompact(pi: ExtensionAPI) {
 		const lastCompactionText = lastCompactionAt
 			? `${lastCompactionTokens?.toLocaleString() ?? "unknown"} tokens at ${new Date(lastCompactionAt).toISOString()}`
 			: "none";
-		const wrappers = wrapperCounts();
-		const currentProvider = ctx.model ? getApiProvider(ctx.model.api) : undefined;
 		const currentWrapperActive =
-			currentProvider !== undefined &&
-			((currentProvider.stream as MarkedStream)[PROVIDER_WRAPPER_MARK] !== undefined ||
-				(currentProvider.streamSimple as MarkedSimpleStream)[PROVIDER_WRAPPER_MARK] !== undefined);
+			ctx.model !== undefined && installedProviders.get(ctx.model.provider) === ctx.model.api;
 
 		return [
 			`Auto-compact config: ${policy.configPath}${policy.error ? ` (${policy.error})` : ""}`,
 			`Default threshold: tokens > ${policy.defaultThresholdTokens.toLocaleString()}; rules: ${policy.rules.length}`,
 			`Current policy: ${currentPolicyText}${testThreshold === undefined ? "" : ` via ${TEST_THRESHOLD_ENV}`}`,
 			`Current estimated context: ${usageText}`,
-			`Provider interception: on demand; current API ${currentWrapperActive ? "wrapped" : "delegating until threshold"}; ${wrappers.active}/${wrappers.registered} registry wrappers active; ${installCount} installation(s)${lastInstallError ? ` (${lastInstallError})` : ""}`,
+			`Provider interception: ModelRuntime overlay on demand; current provider ${currentWrapperActive ? "wrapped" : "delegating until threshold"}; ${installedProviders.size} provider wrapper(s); ${installCount} installation(s)${lastInstallError ? ` (${lastInstallError})` : ""}`,
 			`Armed: ${armedText}`,
 			`Wrapped requests: ${wrappedRequestCount}; armed mismatches: ${armedRequestMismatchCount}`,
 			`Last tool turn: ${lastToolTurn}`,
@@ -263,9 +219,9 @@ export default function autoCompact(pi: ExtensionAPI) {
 			return;
 		}
 
-		// Provider/model setup can refresh Pi's temporary compat registry after session_start.
-		// Re-wrap immediately before arming so the next active request cannot bypass us.
-		if (!installProviderWrapper(model.api, true)) {
+		// Install immediately before arming so the next active ModelRuntime request
+		// cannot bypass the one-shot synthetic overflow.
+		if (!installProviderWrapper(model)) {
 			lastToolTurn = `${modelRef}; threshold exceeded but provider wrapper installation failed`;
 			ctx.ui.notify(`auto-compact: ${lastInstallError ?? "provider wrapper installation failed"}`, "error");
 			return;
