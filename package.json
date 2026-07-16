@@ -1,6 +1,6 @@
 {
   "name": "pi-auto-compact",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Configurable proactive native compaction for Pi",
   "type": "module",
   "license": "MIT",
