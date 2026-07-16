@@ -9,10 +9,10 @@ The default threshold is 200,000 estimated tokens. You can override it by API, p
 Install the public Git package:
 
 ```sh
-pi install git:github.com/tmustier/pi-auto-compact@v0.1.1
+pi install git:github.com/tmustier/pi-auto-compact@v0.1.2
 ```
 
-Omit `@v0.1.1` if you want to track the latest commit on `main`.
+Omit `@v0.1.2` if you want to track the latest commit on `main`.
 
 Restart Pi or run `/reload`. Use `/auto-compact` to check the loaded policy and current model threshold.
 
@@ -141,6 +141,23 @@ PI_AUTO_COMPACT_TEST_THRESHOLD=1 pi
 ```
 
 Use this only for controlled testing.
+
+## Extension integration
+
+Other Pi extensions can request the threshold resolved for a model through Pi's shared event bus. Emit `pi-auto-compact:policy-request:v1` with this payload:
+
+```json
+{
+  "protocolVersion": 1,
+  "model": {
+    "api": "openai-codex-responses",
+    "provider": "openai-codex",
+    "id": "gpt-5.6-sol"
+  }
+}
+```
+
+Auto-compact responds synchronously on `pi-auto-compact:policy:v1` with the matching model identity, `thresholdTokens`, policy source and configuration path. If auto-compact is not loaded, no response is emitted. This lets UI extensions use the active policy without duplicating its rule parser.
 
 ## Compatibility
 

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { createEventBus } from "@earendil-works/pi-coding-agent";
 import {
 	DEFAULT_THRESHOLD_TOKENS,
 	loadPolicy,
@@ -9,6 +10,12 @@ import {
 	resolveThreshold,
 } from "../extensions/auto-compact/config.js";
 import { formatOverflowError } from "../extensions/auto-compact/index.js";
+import {
+	AUTO_COMPACT_POLICY_EVENT,
+	AUTO_COMPACT_POLICY_REQUEST_EVENT,
+	registerPolicyEvents,
+	type AutoCompactPolicySnapshot,
+} from "../extensions/auto-compact/policy-events.js";
 
 const examplePolicy = parsePolicy({
 	defaultThresholdTokens: 200_000,
@@ -99,6 +106,43 @@ test("uses the process test override ahead of configured rules", () => {
 		),
 		{ thresholdTokens: 1, source: "test override" },
 	);
+});
+
+test("publishes the resolved active-model threshold to other extensions", () => {
+	const events = createEventBus();
+	let snapshot: AutoCompactPolicySnapshot | undefined;
+	let responseCount = 0;
+	const unsubscribeResponse = events.on(AUTO_COMPACT_POLICY_EVENT, (data) => {
+		snapshot = data as AutoCompactPolicySnapshot;
+		responseCount += 1;
+	});
+	const unsubscribeRequest = registerPolicyEvents({ events }, examplePolicy);
+
+	events.emit(AUTO_COMPACT_POLICY_REQUEST_EVENT, {
+		protocolVersion: 1,
+		model: {
+			api: "anthropic-messages",
+			provider: "anthropic",
+			id: "claude-opus-4-8",
+		},
+	});
+
+	assert.deepEqual(snapshot, {
+		protocolVersion: 1,
+		model: {
+			api: "anthropic-messages",
+			provider: "anthropic",
+			id: "claude-opus-4-8",
+		},
+		thresholdTokens: 275_000,
+		source: 'rule "specific Opus exception"',
+		configPath: examplePolicy.configPath,
+	});
+
+	events.emit(AUTO_COMPACT_POLICY_REQUEST_EVENT, { protocolVersion: 1, model: null });
+	assert.equal(responseCount, 1);
+	unsubscribeRequest();
+	unsubscribeResponse();
 });
 
 test("returns defaults when the user configuration file is absent", () => {

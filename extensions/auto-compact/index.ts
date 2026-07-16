@@ -12,6 +12,7 @@ import {
 	type StreamOptions,
 } from "@earendil-works/pi-ai/compat";
 import { loadPolicy, resolveThreshold, type ModelIdentity } from "./config.js";
+import { registerPolicyEvents } from "./policy-events.js";
 
 const TEST_THRESHOLD_ENV = "PI_AUTO_COMPACT_TEST_THRESHOLD";
 const PROVIDER_WRAPPER_MARK = Symbol.for("tmustier.pi.auto-compact.provider-wrapper");
@@ -120,6 +121,7 @@ export default function autoCompact(pi: ExtensionAPI) {
 	let wrappedRequestCount = 0;
 	let armedRequestMismatchCount = 0;
 	let lastToolTurn = "none";
+	const unregisterPolicyEvents = registerPolicyEvents(pi, policy, testThreshold);
 
 	function maybeIntercept(model: Model<Api>, context: Context) {
 		wrappedRequestCount += 1;
@@ -237,6 +239,7 @@ export default function autoCompact(pi: ExtensionAPI) {
 	pi.on("session_start", (_event, ctx) => {
 		if (policy.error) ctx.ui.notify(policy.error, "error");
 	});
+	pi.on("session_shutdown", unregisterPolicyEvents);
 
 	pi.on("turn_end", (event, ctx) => {
 		if (event.toolResults.length === 0) return;
