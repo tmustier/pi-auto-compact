@@ -9,10 +9,10 @@ The default threshold is 200,000 estimated tokens. You can override it by API, p
 Install the public Git package:
 
 ```sh
-pi install git:github.com/tmustier/pi-auto-compact@v0.1.2
+pi install git:github.com/tmustier/pi-auto-compact@v0.1.3
 ```
 
-Omit `@v0.1.2` if you want to track the latest commit on `main`.
+Omit `@v0.1.3` if you want to track the latest commit on `main`.
 
 Restart Pi or run `/reload`. Use `/auto-compact` to check the loaded policy and current model threshold.
 
@@ -108,6 +108,7 @@ The extension follows this sequence:
 finish tool batch
 → persist tool results
 → resolve the model threshold
+→ install a stream overlay for the active ModelRuntime provider
 → intercept the next matching provider request
 → emit a synthetic context-overflow response
 → let Pi persist native compaction
@@ -140,7 +141,7 @@ Override every resolved threshold for one Pi process:
 PI_AUTO_COMPACT_TEST_THRESHOLD=1 pi
 ```
 
-Use this only for controlled testing.
+Use this only for controlled testing. A fresh session may still be too small for Pi to find a compaction cut point with the default `keepRecentTokens: 20000`; use a session with enough history or temporarily lower `keepRecentTokens` in project settings for the smoke test.
 
 ## Extension integration
 
@@ -161,12 +162,14 @@ Auto-compact responds synchronously on `pi-auto-compact:policy:v1` with the matc
 
 ## Compatibility
 
-The extension is tested with Pi 0.80.7. It uses the temporary `@earendil-works/pi-ai/compat` provider registry because Pi does not expose the active `Agent` or a persisted compact-and-continue operation to extensions.
+The extension requires Pi 0.80.8 or newer and is tested with Pi 0.80.8. Pi 0.80.8 moved live requests from the temporary `@earendil-works/pi-ai/compat` registry to `ModelRuntime`. The extension therefore uses `pi.registerProvider()` to add a `streamSimple` overlay to the active provider, while delegating ordinary requests and compaction summaries to the underlying API implementation.
 
-The compat registry may change in a future Pi release. After upgrading Pi, check that:
+Pi currently exposes one extension `streamSimple` overlay per provider. If another extension supplies a custom stream implementation for the same provider, loading auto-compact after it will replace that stream implementation. Built-in providers and providers configured through `models.json` continue to work.
+
+After upgrading Pi, check that:
 
 - `/auto-compact` loads without a configuration error
-- the active model API wraps when a threshold is crossed
+- the active ModelRuntime provider wraps when a threshold is crossed
 - Pi recognises the synthetic error as context overflow
 - the session contains a persisted compaction entry
 - Pi resumes without adding a user continuation message
