@@ -1,5 +1,11 @@
 {
   "defaultThresholdTokens": 200000,
+  "compactionModel": {
+    "provider": "openai-codex",
+    "model": "gpt-5.3-codex-spark",
+    "thinking": "medium",
+    "instructions": "Do not drop unfinished work, and do not make unfinished work sound finished. Keep every pending check, tentative finding, candidate, blocker and unresolved question in the summary. The next agent may otherwise act on unverified conclusions."
+  },
   "rules": [
     {
       "name": "Anthropic 4.6 and earlier",

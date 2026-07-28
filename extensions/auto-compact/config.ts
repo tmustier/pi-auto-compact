@@ -13,6 +13,15 @@ export type ModelIdentity = {
 	id: string;
 };
 
+export type CompactionThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+
+export type CompactionModelOverride = {
+	provider: string;
+	model: string;
+	thinking: CompactionThinkingLevel;
+	instructions?: string;
+};
+
 type ModelVersion = {
 	major: number;
 	minor: number;
@@ -40,6 +49,7 @@ export type AutoCompactPolicy = {
 	configPath: string;
 	defaultThresholdTokens: number;
 	rules: CompiledRule[];
+	compactionModel?: CompactionModelOverride;
 	error?: string;
 };
 
@@ -73,6 +83,12 @@ function parseOptionalString(value: unknown, path: string): string | undefined {
 		throw new Error(`${path} must be a non-empty string`);
 	}
 	return value;
+}
+
+function parseRequiredString(value: unknown, path: string): string {
+	const parsed = parseOptionalString(value, path);
+	if (parsed === undefined) throw new Error(`${path} is required`);
+	return parsed;
 }
 
 function parsePattern(value: unknown, path: string): RegExp | undefined {
@@ -114,6 +130,24 @@ function parseVersionRange(value: unknown, path: string): VersionRange | undefin
 	return range;
 }
 
+function parseCompactionModel(value: unknown): CompactionModelOverride | undefined {
+	if (value === undefined) return undefined;
+	if (!isRecord(value)) {
+		throw new Error("compactionModel must be an object");
+	}
+	assertKnownKeys(value, ["provider", "model", "thinking", "instructions"], "compactionModel");
+	const thinking = value.thinking ?? "medium";
+	if (!["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(String(thinking))) {
+		throw new Error("compactionModel.thinking must be one of off, minimal, low, medium, high, xhigh, or max");
+	}
+	return {
+		provider: parseRequiredString(value.provider, "compactionModel.provider"),
+		model: parseRequiredString(value.model, "compactionModel.model"),
+		thinking: thinking as CompactionThinkingLevel,
+		instructions: parseOptionalString(value.instructions, "compactionModel.instructions"),
+	};
+}
+
 function parseRule(value: unknown, index: number): CompiledRule {
 	const path = `rules[${index}]`;
 	if (!isRecord(value)) {
@@ -140,7 +174,7 @@ export function parsePolicy(value: unknown, configPath = CONFIG_PATH): AutoCompa
 	if (!isRecord(value)) {
 		throw new Error("configuration must be a JSON object");
 	}
-	assertKnownKeys(value, ["defaultThresholdTokens", "rules"], "configuration");
+	assertKnownKeys(value, ["defaultThresholdTokens", "rules", "compactionModel"], "configuration");
 
 	const defaultThresholdTokens =
 		value.defaultThresholdTokens === undefined
@@ -154,6 +188,7 @@ export function parsePolicy(value: unknown, configPath = CONFIG_PATH): AutoCompa
 		configPath,
 		defaultThresholdTokens,
 		rules: (value.rules ?? []).map(parseRule),
+		compactionModel: parseCompactionModel(value.compactionModel),
 	};
 }
 

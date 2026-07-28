@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { compact, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
 	createAssistantMessageEventStream,
 	getApiProvider,
@@ -170,10 +170,14 @@ export default function autoCompact(pi: ExtensionAPI) {
 			: "none";
 		const currentWrapperActive =
 			ctx.model !== undefined && installedProviders.get(ctx.model.provider) === ctx.model.api;
+		const compactionModelText = policy.compactionModel
+			? `${policy.compactionModel.provider}/${policy.compactionModel.model} (${policy.compactionModel.thinking} thinking)`
+			: "active model";
 
 		return [
 			`Auto-compact config: ${policy.configPath}${policy.error ? ` (${policy.error})` : ""}`,
 			`Default threshold: tokens > ${policy.defaultThresholdTokens.toLocaleString()}; rules: ${policy.rules.length}`,
+			`Compaction model: ${compactionModelText}`,
 			`Current policy: ${currentPolicyText}${testThreshold === undefined ? "" : ` via ${TEST_THRESHOLD_ENV}`}`,
 			`Current estimated context: ${usageText}`,
 			`Provider interception: ModelRuntime overlay on demand; current provider ${currentWrapperActive ? "wrapped" : "delegating until threshold"}; ${installedProviders.size} provider wrapper(s); ${installCount} installation(s)${lastInstallError ? ` (${lastInstallError})` : ""}`,
@@ -194,6 +198,46 @@ export default function autoCompact(pi: ExtensionAPI) {
 
 	pi.on("session_start", (_event, ctx) => {
 		if (policy.error) ctx.ui.notify(policy.error, "error");
+	});
+	pi.on("session_before_compact", async (event, ctx) => {
+		const override = policy.compactionModel;
+		if (!override) return;
+
+		const overrideRef = `${override.provider}/${override.model}`;
+		const activeRef = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "the active model";
+		try {
+			const model = ctx.modelRegistry.find(override.provider, override.model);
+			if (!model) throw new Error("model is not available");
+
+			const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+			if (!auth.ok) throw new Error(auth.error);
+			const providerAuth = await ctx.modelRegistry.getProviderAuth(model.provider);
+			const requestModel = providerAuth?.auth.baseUrl ? { ...model, baseUrl: providerAuth.auth.baseUrl } : model;
+			const provider = ctx.modelRegistry.getProvider(model.provider);
+			if (!provider) throw new Error("runtime provider is not available");
+
+			ctx.ui.notify(`auto-compact: compacting with ${overrideRef} (${override.thinking} thinking)`, "info");
+			const customInstructions = [override.instructions, event.customInstructions].filter(Boolean).join("\n\n");
+			const result = await compact(
+				event.preparation,
+				requestModel,
+				auth.apiKey,
+				auth.headers,
+				customInstructions || undefined,
+				event.signal,
+				override.thinking,
+				provider.streamSimple.bind(provider),
+				auth.env,
+			);
+			return { compaction: result };
+		} catch (error) {
+			if (event.signal.aborted) return;
+			const message = error instanceof Error ? error.message : String(error);
+			ctx.ui.notify(
+				`auto-compact: ${overrideRef} compaction failed (${message}); falling back to ${activeRef}`,
+				"warning",
+			);
+		}
 	});
 	pi.on("session_shutdown", unregisterPolicyEvents);
 

@@ -145,10 +145,35 @@ test("publishes the resolved active-model threshold to other extensions", () => 
 	unsubscribeResponse();
 });
 
+test("parses a compaction model override", () => {
+	const policy = parsePolicy({
+		compactionModel: {
+			provider: "openai-codex",
+			model: "gpt-5.3-codex-spark",
+			thinking: "medium",
+			instructions: "Keep unfinished work unfinished.",
+		},
+	});
+	assert.deepEqual(policy.compactionModel, {
+		provider: "openai-codex",
+		model: "gpt-5.3-codex-spark",
+		thinking: "medium",
+		instructions: "Keep unfinished work unfinished.",
+	});
+});
+
+test("defaults configured compaction model thinking to medium", () => {
+	const policy = parsePolicy({
+		compactionModel: { provider: "openai-codex", model: "gpt-5.3-codex-spark" },
+	});
+	assert.equal(policy.compactionModel?.thinking, "medium");
+});
+
 test("returns defaults when the user configuration file is absent", () => {
 	const policy = loadPolicy(join(tmpdir(), `missing-auto-compact-${process.pid}.json`));
 	assert.equal(policy.defaultThresholdTokens, DEFAULT_THRESHOLD_TOKENS);
 	assert.deepEqual(policy.rules, []);
+	assert.equal(policy.compactionModel, undefined);
 	assert.equal(policy.error, undefined);
 });
 
@@ -163,5 +188,10 @@ test("rejects malformed configuration", () => {
 	assert.throws(() => parsePolicy({ rules: [{ thresholdTokens: 1, modelPattern: "[" }] }), /valid regular expression/);
 	assert.throws(() => parsePolicy({ rules: [{ thresholdTokens: 1, version: { gte: "5" } }] }), /major\.minor/);
 	assert.throws(() => parsePolicy({ rules: [{ thresholdTokens: -1 }] }), /non-negative integer/);
+	assert.throws(() => parsePolicy({ compactionModel: { model: "spark" } }), /provider is required/);
+	assert.throws(
+		() => parsePolicy({ compactionModel: { provider: "openai-codex", model: "spark", thinking: "extreme" } }),
+		/compactionModel\.thinking/,
+	);
 	assert.throws(() => parsePolicy({ unexpected: true }), /unknown field/);
 });

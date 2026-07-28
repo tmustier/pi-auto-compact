@@ -2,7 +2,7 @@
 
 Pi auto-compact persists native compaction after a tool-bearing turn crosses a configurable token threshold. Pi then continues the active request without adding a user continuation message.
 
-The default threshold is 200,000 estimated tokens. You can override it by API, provider, exact model, model ID pattern or numeric model version.
+The default threshold is 200,000 estimated tokens. You can override it by API, provider, exact model, model ID pattern or numeric model version. You can also use a dedicated model for native compaction without changing the active conversation model.
 
 ## Install
 
@@ -36,6 +36,27 @@ If the file does not exist, the extension uses this policy:
   "rules": []
 }
 ```
+
+## Configure the compaction model
+
+Add `compactionModel` to generate Pi's native summary with a dedicated model while leaving the active conversation model unchanged:
+
+```json
+{
+  "defaultThresholdTokens": 200000,
+  "compactionModel": {
+    "provider": "openai-codex",
+    "model": "gpt-5.3-codex-spark",
+    "thinking": "medium",
+    "instructions": "Do not drop unfinished work, and do not make unfinished work sound finished. Keep every pending check, tentative finding, candidate, blocker and unresolved question in the summary. The next agent may otherwise act on unverified conclusions."
+  },
+  "rules": []
+}
+```
+
+`provider` and `model` are required. `thinking` defaults to `medium` and accepts `off`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`. `instructions` is optional and is appended to any instructions supplied to `/compact`.
+
+The extension displays the selected compaction model when compaction starts. If the model is unavailable, authentication cannot be resolved, the summary input exceeds its context window or summarization otherwise fails, it displays a warning and returns control to Pi. Pi then performs normal compaction with the active model.
 
 Rules run from top to bottom. The first matching rule wins. Every matcher in that rule must match.
 
@@ -128,6 +149,7 @@ Pi recognises `token limit exceeded` as context overflow. It saves the error for
 The extension does not:
 
 - change a model's logical context window
+- change the active conversation model
 - call `ctx.compact()`
 - abort the active run
 - add a user or custom continuation message
@@ -162,7 +184,7 @@ Auto-compact responds synchronously on `pi-auto-compact:policy:v1` with the matc
 
 ## Compatibility
 
-The extension requires Pi 0.80.8 or newer and is tested with Pi 0.80.8. Pi 0.80.8 moved live requests from the temporary `@earendil-works/pi-ai/compat` registry to `ModelRuntime`. The extension therefore uses `pi.registerProvider()` to add a `streamSimple` overlay to the active provider, while delegating ordinary requests and compaction summaries to the underlying API implementation.
+The extension requires Pi 0.82.1 or newer and is tested with Pi 0.82.1. Pi 0.80.8 moved live requests from the temporary `@earendil-works/pi-ai/compat` registry to `ModelRuntime`. The extension therefore uses `pi.registerProvider()` to add a `streamSimple` overlay to the active provider, while delegating ordinary requests and compaction summaries to the underlying API implementation.
 
 Pi currently exposes one extension `streamSimple` overlay per provider. If another extension supplies a custom stream implementation for the same provider, loading auto-compact after it will replace that stream implementation. Built-in providers and providers configured through `models.json` continue to work.
 
