@@ -2,7 +2,6 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
-export const DEFAULT_THRESHOLD_TOKENS = 200_000;
 export const CONFIG_PATH = process.env.PI_AUTO_COMPACT_CONFIG
 	? resolve(process.env.PI_AUTO_COMPACT_CONFIG)
 	: join(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"), "auto-compact.json");
@@ -47,7 +46,7 @@ type CompiledRule = {
 
 export type AutoCompactPolicy = {
 	configPath: string;
-	defaultThresholdTokens: number;
+	defaultThresholdTokens?: number;
 	rules: CompiledRule[];
 	compactionModel?: CompactionModelOverride;
 	error?: string;
@@ -178,7 +177,7 @@ export function parsePolicy(value: unknown, configPath = CONFIG_PATH): AutoCompa
 
 	const defaultThresholdTokens =
 		value.defaultThresholdTokens === undefined
-			? DEFAULT_THRESHOLD_TOKENS
+			? undefined
 			: parseThreshold(value.defaultThresholdTokens, "defaultThresholdTokens");
 	if (value.rules !== undefined && !Array.isArray(value.rules)) {
 		throw new Error("rules must be an array");
@@ -194,11 +193,7 @@ export function parsePolicy(value: unknown, configPath = CONFIG_PATH): AutoCompa
 
 export function loadPolicy(configPath = CONFIG_PATH): AutoCompactPolicy {
 	if (!existsSync(configPath)) {
-		return {
-			configPath,
-			defaultThresholdTokens: DEFAULT_THRESHOLD_TOKENS,
-			rules: [],
-		};
+		return { configPath, rules: [] };
 	}
 	try {
 		return parsePolicy(JSON.parse(readFileSync(configPath, "utf8")) as unknown, configPath);
@@ -206,7 +201,6 @@ export function loadPolicy(configPath = CONFIG_PATH): AutoCompactPolicy {
 		const message = error instanceof Error ? error.message : String(error);
 		return {
 			configPath,
-			defaultThresholdTokens: DEFAULT_THRESHOLD_TOKENS,
 			rules: [],
 			error: `Could not load auto-compact configuration at ${configPath}: ${message}`,
 		};
@@ -243,11 +237,11 @@ function matchesRule(rule: CompiledRule, model: ModelIdentity): boolean {
 	return matchesVersion(extractVersion(model.id), rule.version);
 }
 
-export function resolveThreshold(
+export function resolveConfiguredThreshold(
 	policy: AutoCompactPolicy,
 	model: ModelIdentity,
 	testThreshold?: number,
-): ThresholdResolution {
+): ThresholdResolution | undefined {
 	if (testThreshold !== undefined) {
 		return { thresholdTokens: testThreshold, source: "test override" };
 	}
@@ -255,5 +249,17 @@ export function resolveThreshold(
 	if (rule) {
 		return { thresholdTokens: rule.thresholdTokens, source: `rule "${rule.name}"` };
 	}
-	return { thresholdTokens: policy.defaultThresholdTokens, source: "default" };
+	if (policy.defaultThresholdTokens !== undefined) {
+		return { thresholdTokens: policy.defaultThresholdTokens, source: "default" };
+	}
+	return undefined;
+}
+
+export function resolveThreshold(
+	policy: AutoCompactPolicy,
+	model: ModelIdentity,
+	nativeThreshold: ThresholdResolution,
+	testThreshold?: number,
+): ThresholdResolution {
+	return resolveConfiguredThreshold(policy, model, testThreshold) ?? nativeThreshold;
 }

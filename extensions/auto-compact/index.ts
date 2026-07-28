@@ -7,7 +7,13 @@ import {
 	type Context,
 	type Model,
 } from "@earendil-works/pi-ai/compat";
-import { loadPolicy, resolveThreshold, type ModelIdentity } from "./config.js";
+import {
+	loadPolicy,
+	resolveConfiguredThreshold,
+	resolveThreshold,
+	type ModelIdentity,
+} from "./config.js";
+import { loadNativeCompactionThreshold } from "./native-threshold.js";
 import { registerPolicyEvents } from "./policy-events.js";
 
 const TEST_THRESHOLD_ENV = "PI_AUTO_COMPACT_TEST_THRESHOLD";
@@ -102,8 +108,27 @@ export default function autoCompact(pi: ExtensionAPI) {
 	let wrappedRequestCount = 0;
 	let armedRequestMismatchCount = 0;
 	let lastToolTurn = "none";
+	let activeContext: ExtensionContext | undefined;
 	const installedProviders = new Map<string, Api>();
-	const unregisterPolicyEvents = registerPolicyEvents(pi, policy, testThreshold);
+
+	function resolveRuntimeThreshold(ctx: ExtensionContext, model: Model<Api>) {
+		const native = loadNativeCompactionThreshold(ctx, model.contextWindow);
+		const nativeResolution = {
+			thresholdTokens: native.thresholdTokens,
+			source: `Pi native (${native.contextWindow.toLocaleString()} context - ${native.reserveTokens.toLocaleString()} reserve)`,
+		};
+		return {
+			native,
+			resolution: resolveThreshold(policy, modelIdentity(model), nativeResolution, testThreshold),
+		};
+	}
+
+	const unregisterPolicyEvents = registerPolicyEvents(pi, policy, (identity) => {
+		const ctx = activeContext;
+		const model = ctx?.modelRegistry.find(identity.provider, identity.id);
+		if (ctx && model?.api === identity.api) return resolveRuntimeThreshold(ctx, model).resolution;
+		return resolveConfiguredThreshold(policy, identity, testThreshold);
+	});
 
 	function maybeIntercept(model: Model<Api>, context: Context) {
 		wrappedRequestCount += 1;
@@ -154,13 +179,12 @@ export default function autoCompact(pi: ExtensionAPI) {
 	}
 
 	function status(ctx: ExtensionContext): string {
+		activeContext = ctx;
 		const usage = ctx.getContextUsage();
 		const usageText = usage?.tokens === null || usage?.tokens === undefined ? "unknown" : usage.tokens.toLocaleString();
-		const currentResolution = ctx.model
-			? resolveThreshold(policy, modelIdentity(ctx.model), testThreshold)
-			: undefined;
-		const currentPolicyText = currentResolution
-			? `tokens > ${currentResolution.thresholdTokens.toLocaleString()} (${currentResolution.source})`
+		const current = ctx.model ? resolveRuntimeThreshold(ctx, ctx.model) : undefined;
+		const currentPolicyText = current
+			? `tokens > ${current.resolution.thresholdTokens.toLocaleString()} (${current.resolution.source})`
 			: "no model selected";
 		const armedText = armed
 			? `${armed.provider}/${armed.model} at ${armed.tokens.toLocaleString()} tokens; threshold ${armed.threshold.toLocaleString()} (${armed.policySource})`
@@ -176,7 +200,8 @@ export default function autoCompact(pi: ExtensionAPI) {
 
 		return [
 			`Auto-compact config: ${policy.configPath}${policy.error ? ` (${policy.error})` : ""}`,
-			`Default threshold: tokens > ${policy.defaultThresholdTokens.toLocaleString()}; rules: ${policy.rules.length}`,
+			`Default threshold: ${policy.defaultThresholdTokens === undefined ? "Pi native" : `tokens > ${policy.defaultThresholdTokens.toLocaleString()}`}; rules: ${policy.rules.length}`,
+			`Pi native compaction: ${current ? `${current.native.enabled ? "enabled" : "disabled"}; tokens > ${current.native.thresholdTokens.toLocaleString()}` : "no model selected"}`,
 			`Compaction model: ${compactionModelText}`,
 			`Current policy: ${currentPolicyText}${testThreshold === undefined ? "" : ` via ${TEST_THRESHOLD_ENV}`}`,
 			`Current estimated context: ${usageText}`,
@@ -197,6 +222,7 @@ export default function autoCompact(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", (_event, ctx) => {
+		activeContext = ctx;
 		if (policy.error) ctx.ui.notify(policy.error, "error");
 		if (policy.compactionModel) {
 			const overrideRef = `${policy.compactionModel.provider}/${policy.compactionModel.model}`;
@@ -246,9 +272,13 @@ export default function autoCompact(pi: ExtensionAPI) {
 			);
 		}
 	});
-	pi.on("session_shutdown", unregisterPolicyEvents);
+	pi.on("session_shutdown", () => {
+		activeContext = undefined;
+		unregisterPolicyEvents();
+	});
 
 	pi.on("turn_end", (event, ctx) => {
+		activeContext = ctx;
 		if (event.toolResults.length === 0) return;
 
 		const model = ctx.model;
@@ -264,7 +294,12 @@ export default function autoCompact(pi: ExtensionAPI) {
 			return;
 		}
 
-		const resolution = resolveThreshold(policy, modelIdentity(model), testThreshold);
+		const current = resolveRuntimeThreshold(ctx, model);
+		if (!current.native.enabled) {
+			lastToolTurn = `${modelRef}; Pi native auto-compaction is disabled`;
+			return;
+		}
+		const { resolution } = current;
 		if (tokens <= resolution.thresholdTokens) {
 			lastToolTurn = `${modelRef}; ${tokens.toLocaleString()} tokens did not exceed ${resolution.thresholdTokens.toLocaleString()} (${resolution.source})`;
 			return;
@@ -289,7 +324,10 @@ export default function autoCompact(pi: ExtensionAPI) {
 		};
 	});
 
-	pi.on("model_select", clearArmedState);
+	pi.on("model_select", (_event, ctx) => {
+		activeContext = ctx;
+		clearArmedState();
+	});
 	pi.on("agent_end", clearArmedState);
 	pi.on("agent_settled", () => {
 		syntheticAwaitingCompaction = false;

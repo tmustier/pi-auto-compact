@@ -4,10 +4,11 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createEventBus } from "@earendil-works/pi-coding-agent";
 import {
-	DEFAULT_THRESHOLD_TOKENS,
 	loadPolicy,
 	parsePolicy,
+	resolveConfiguredThreshold,
 	resolveThreshold,
+	type ModelIdentity,
 } from "../extensions/auto-compact/config.js";
 import { formatOverflowError } from "../extensions/auto-compact/index.js";
 import {
@@ -42,9 +43,13 @@ const examplePolicy = parsePolicy({
 	],
 });
 
+const nativeThreshold = { thresholdTokens: 983_616, source: "Pi native" };
+const resolve = (model: ModelIdentity, testThreshold?: number) =>
+	resolveThreshold(examplePolicy, model, nativeThreshold, testThreshold);
+
 test("uses the first matching rule", () => {
 	assert.deepEqual(
-		resolveThreshold(examplePolicy, {
+		resolve({
 			api: "anthropic-messages",
 			provider: "anthropic",
 			id: "claude-opus-4-8",
@@ -56,23 +61,23 @@ test("uses the first matching rule", () => {
 test("matches Anthropic model versions through 4.6", () => {
 	for (const id of ["claude-3-5-sonnet", "claude-sonnet-4-5", "claude-opus-4-6"]) {
 		assert.equal(
-			resolveThreshold(examplePolicy, { api: "anthropic-messages", provider: "anthropic", id }).thresholdTokens,
+			resolve({ api: "anthropic-messages", provider: "anthropic", id }).thresholdTokens,
 			120_000,
 		);
 	}
 	assert.equal(
-		resolveThreshold(examplePolicy, {
+		resolve({
 			api: "anthropic-messages",
 			provider: "anthropic",
 			id: "claude-sonnet-4-7",
 		}).thresholdTokens,
-		DEFAULT_THRESHOLD_TOKENS,
+		200_000,
 	);
 });
 
 test("matches GPT 5.5 and newer independently of provider", () => {
 	assert.equal(
-		resolveThreshold(examplePolicy, {
+		resolve({
 			api: "bedrock-converse-stream",
 			provider: "bedrock",
 			id: "gpt-5.6-luna",
@@ -80,7 +85,7 @@ test("matches GPT 5.5 and newer independently of provider", () => {
 		250_000,
 	);
 	assert.equal(
-		resolveThreshold(examplePolicy, {
+		resolve({
 			api: "openai-codex-responses",
 			provider: "openai-codex",
 			id: "gpt-5.5",
@@ -88,19 +93,18 @@ test("matches GPT 5.5 and newer independently of provider", () => {
 		250_000,
 	);
 	assert.equal(
-		resolveThreshold(examplePolicy, {
+		resolve({
 			api: "openai-responses",
 			provider: "openai",
 			id: "gpt-5.4",
 		}).thresholdTokens,
-		DEFAULT_THRESHOLD_TOKENS,
+		200_000,
 	);
 });
 
 test("uses the process test override ahead of configured rules", () => {
 	assert.deepEqual(
-		resolveThreshold(
-			examplePolicy,
+		resolve(
 			{ api: "anthropic-messages", provider: "anthropic", id: "claude-opus-4-8" },
 			1,
 		),
@@ -116,7 +120,11 @@ test("publishes the resolved active-model threshold to other extensions", () => 
 		snapshot = data as AutoCompactPolicySnapshot;
 		responseCount += 1;
 	});
-	const unsubscribeRequest = registerPolicyEvents({ events }, examplePolicy);
+	const unsubscribeRequest = registerPolicyEvents(
+		{ events },
+		examplePolicy,
+		(model) => resolveConfiguredThreshold(examplePolicy, model),
+	);
 
 	events.emit(AUTO_COMPACT_POLICY_REQUEST_EVENT, {
 		protocolVersion: 1,
@@ -169,9 +177,13 @@ test("defaults configured compaction model thinking to medium", () => {
 	assert.equal(policy.compactionModel?.thinking, "medium");
 });
 
-test("returns defaults when the user configuration file is absent", () => {
+test("uses Pi's native threshold when no configured default exists", () => {
 	const policy = loadPolicy(join(tmpdir(), `missing-auto-compact-${process.pid}.json`));
-	assert.equal(policy.defaultThresholdTokens, DEFAULT_THRESHOLD_TOKENS);
+	assert.equal(policy.defaultThresholdTokens, undefined);
+	assert.deepEqual(
+		resolveThreshold(policy, { api: "test", provider: "test", id: "test" }, nativeThreshold),
+		nativeThreshold,
+	);
 	assert.deepEqual(policy.rules, []);
 	assert.equal(policy.compactionModel, undefined);
 	assert.equal(policy.error, undefined);

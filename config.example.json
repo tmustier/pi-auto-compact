@@ -1,5 +1,4 @@
 {
-  "defaultThresholdTokens": 200000,
   "compactionModel": {
     "provider": "openai-codex",
     "model": "gpt-5.3-codex-spark",
