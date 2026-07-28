@@ -198,6 +198,13 @@ export default function autoCompact(pi: ExtensionAPI) {
 
 	pi.on("session_start", (_event, ctx) => {
 		if (policy.error) ctx.ui.notify(policy.error, "error");
+		if (policy.compactionModel) {
+			const overrideRef = `${policy.compactionModel.provider}/${policy.compactionModel.model}`;
+			ctx.ui.notify(
+				`auto-compact: dedicated compaction model ${overrideRef} is enabled; disable other compaction extensions because Pi runs every compaction handler`,
+				"warning",
+			);
+		}
 	});
 	pi.on("session_before_compact", async (event, ctx) => {
 		const override = policy.compactionModel;
