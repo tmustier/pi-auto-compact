@@ -1,6 +1,6 @@
 # Pi auto-compact
 
-Pi auto-compact compacts long Pi sessions after a tool turn, then continues the same request. The default threshold is 200,000 estimated tokens.
+Pi auto-compact compacts long Pi sessions after a tool turn, then continues the same request. The default threshold is 200,000 estimated tokens, capped at Pi's own compaction limit (`context window - reserved tokens`) for smaller-context models.
 
 ## Install
 
@@ -14,7 +14,7 @@ Pi packages have full system access. Review the source before installing.
 
 ## Recommended setup
 
-The extension works without configuration. It uses the active conversation model and a 200,000-token threshold.
+The extension works without configuration. It uses the active conversation model and a 200,000-token threshold. When a model's context window is smaller than that, the extension uses Pi's own limit for the model instead, so the threshold stays reachable.
 
 We recommend using Codex Spark for compaction. This keeps the conversation model unchanged and tells the summary to preserve unfinished work.
 
@@ -22,7 +22,6 @@ Create `~/.pi/agent/auto-compact.json`:
 
 ```json
 {
-  "defaultThresholdTokens": 200000,
   "compactionModel": {
     "provider": "openai-codex",
     "model": "gpt-5.3-codex-spark",
@@ -68,7 +67,7 @@ A rule can match:
 - `providerPattern` or `modelPattern` with a JavaScript regular expression
 - the first numeric model version with `lt`, `lte`, `gt` or `gte`
 
-Each rule needs `thresholdTokens`. An optional `name` appears in `/auto-compact` output.
+Each rule needs `thresholdTokens`. An optional `name` appears in `/auto-compact` output. An explicit top-level `defaultThresholdTokens` replaces the built-in capped default for unmatched models.
 
 Set `PI_AUTO_COMPACT_CONFIG` to use another config path. Set `PI_CODING_AGENT_DIR` to move the Pi agent directory.
 
@@ -87,6 +86,8 @@ Disable other compaction extensions when you set `compactionModel`. Pi runs ever
 ## How it behaves
 
 After a tool turn crosses the threshold, the extension makes Pi handle the next request as a native context overflow. Pi saves the compaction and continues without adding a user message.
+
+The extension follows Pi's merged global and project compaction settings. When Pi's native compaction is disabled (`compaction.enabled: false`), the extension does not trigger.
 
 The extension does not change the model context window, switch the conversation model or send the intercepted request upstream.
 

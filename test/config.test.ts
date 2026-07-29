@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createEventBus } from "@earendil-works/pi-coding-agent";
 import {
+	cappedDefaultThreshold,
+	DEFAULT_THRESHOLD_TOKENS,
 	loadPolicy,
 	parsePolicy,
 	resolveConfiguredThreshold,
@@ -46,6 +48,15 @@ const examplePolicy = parsePolicy({
 const nativeThreshold = { thresholdTokens: 983_616, source: "Pi native" };
 const resolve = (model: ModelIdentity, testThreshold?: number) =>
 	resolveThreshold(examplePolicy, model, nativeThreshold, testThreshold);
+
+test("caps the built-in default at Pi's native limit for small context windows", () => {
+	const small = { thresholdTokens: 111_616, source: "Pi native limit (128,000 context - 16,384 reserve)" };
+	assert.deepEqual(cappedDefaultThreshold(small), small);
+	assert.deepEqual(cappedDefaultThreshold({ thresholdTokens: 983_616, source: "Pi native limit" }), {
+		thresholdTokens: DEFAULT_THRESHOLD_TOKENS,
+		source: "default",
+	});
+});
 
 test("uses the first matching rule", () => {
 	assert.deepEqual(

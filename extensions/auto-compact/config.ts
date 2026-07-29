@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
+export const DEFAULT_THRESHOLD_TOKENS = 200_000;
 export const CONFIG_PATH = process.env.PI_AUTO_COMPACT_CONFIG
 	? resolve(process.env.PI_AUTO_COMPACT_CONFIG)
 	: join(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"), "auto-compact.json");
@@ -255,11 +256,20 @@ export function resolveConfiguredThreshold(
 	return undefined;
 }
 
+/**
+ * The built-in default: 200,000 tokens, capped at Pi's native limit for
+ * models whose context window sits below the default.
+ */
+export function cappedDefaultThreshold(nativeThreshold: ThresholdResolution): ThresholdResolution {
+	if (nativeThreshold.thresholdTokens < DEFAULT_THRESHOLD_TOKENS) return nativeThreshold;
+	return { thresholdTokens: DEFAULT_THRESHOLD_TOKENS, source: "default" };
+}
+
 export function resolveThreshold(
 	policy: AutoCompactPolicy,
 	model: ModelIdentity,
-	nativeThreshold: ThresholdResolution,
+	fallback: ThresholdResolution,
 	testThreshold?: number,
 ): ThresholdResolution {
-	return resolveConfiguredThreshold(policy, model, testThreshold) ?? nativeThreshold;
+	return resolveConfiguredThreshold(policy, model, testThreshold) ?? fallback;
 }

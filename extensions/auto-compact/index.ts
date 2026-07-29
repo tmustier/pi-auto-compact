@@ -8,6 +8,8 @@ import {
 	type Model,
 } from "@earendil-works/pi-ai/compat";
 import {
+	cappedDefaultThreshold,
+	DEFAULT_THRESHOLD_TOKENS,
 	loadPolicy,
 	resolveConfiguredThreshold,
 	resolveThreshold,
@@ -113,13 +115,13 @@ export default function autoCompact(pi: ExtensionAPI) {
 
 	function resolveRuntimeThreshold(ctx: ExtensionContext, model: Model<Api>) {
 		const native = loadNativeCompactionThreshold(ctx, model.contextWindow);
-		const nativeResolution = {
+		const fallback = cappedDefaultThreshold({
 			thresholdTokens: native.thresholdTokens,
-			source: `Pi native (${native.contextWindow.toLocaleString()} context - ${native.reserveTokens.toLocaleString()} reserve)`,
-		};
+			source: `Pi native limit (${native.contextWindow.toLocaleString()} context - ${native.reserveTokens.toLocaleString()} reserve)`,
+		});
 		return {
 			native,
-			resolution: resolveThreshold(policy, modelIdentity(model), nativeResolution, testThreshold),
+			resolution: resolveThreshold(policy, modelIdentity(model), fallback, testThreshold),
 		};
 	}
 
@@ -127,7 +129,12 @@ export default function autoCompact(pi: ExtensionAPI) {
 		const ctx = activeContext;
 		const model = ctx?.modelRegistry.find(identity.provider, identity.id);
 		if (ctx && model?.api === identity.api) return resolveRuntimeThreshold(ctx, model).resolution;
-		return resolveConfiguredThreshold(policy, identity, testThreshold);
+		return (
+			resolveConfiguredThreshold(policy, identity, testThreshold) ?? {
+				thresholdTokens: DEFAULT_THRESHOLD_TOKENS,
+				source: "default",
+			}
+		);
 	});
 
 	function maybeIntercept(model: Model<Api>, context: Context) {
@@ -200,7 +207,7 @@ export default function autoCompact(pi: ExtensionAPI) {
 
 		return [
 			`Auto-compact config: ${policy.configPath}${policy.error ? ` (${policy.error})` : ""}`,
-			`Default threshold: ${policy.defaultThresholdTokens === undefined ? "Pi native" : `tokens > ${policy.defaultThresholdTokens.toLocaleString()}`}; rules: ${policy.rules.length}`,
+			`Default threshold: ${policy.defaultThresholdTokens === undefined ? `tokens > min(${DEFAULT_THRESHOLD_TOKENS.toLocaleString()}, Pi native limit)` : `tokens > ${policy.defaultThresholdTokens.toLocaleString()}`}; rules: ${policy.rules.length}`,
 			`Pi native compaction: ${current ? `${current.native.enabled ? "enabled" : "disabled"}; tokens > ${current.native.thresholdTokens.toLocaleString()}` : "no model selected"}`,
 			`Compaction model: ${compactionModelText}`,
 			`Current policy: ${currentPolicyText}${testThreshold === undefined ? "" : ` via ${TEST_THRESHOLD_ENV}`}`,
