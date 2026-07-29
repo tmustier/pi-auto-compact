@@ -1,8 +1,8 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import {
-	resolveThreshold,
-	type AutoCompactPolicy,
-	type ModelIdentity,
+import type {
+	AutoCompactPolicy,
+	ModelIdentity,
+	ThresholdResolution,
 } from "./config.js";
 
 export const AUTO_COMPACT_POLICY_REQUEST_EVENT = "pi-auto-compact:policy-request:v1";
@@ -36,13 +36,14 @@ function parseRequest(value: unknown): AutoCompactPolicyRequest | undefined {
 export function registerPolicyEvents(
 	pi: Pick<ExtensionAPI, "events">,
 	policy: AutoCompactPolicy,
-	testThreshold?: number,
+	resolve: (model: ModelIdentity) => ThresholdResolution | undefined,
 ): () => void {
 	return pi.events.on(AUTO_COMPACT_POLICY_REQUEST_EVENT, (data) => {
 		const request = parseRequest(data);
 		if (!request) return;
 
-		const resolution = resolveThreshold(policy, request.model, testThreshold);
+		const resolution = resolve(request.model);
+		if (!resolution) return;
 		const snapshot: AutoCompactPolicySnapshot = {
 			protocolVersion: 1,
 			model: request.model,

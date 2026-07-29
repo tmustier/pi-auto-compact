@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { tmpdir } from "node:os";
 import { test } from "node:test";
 import {
 	createEventBus,
@@ -46,7 +47,9 @@ test("intercepts the next ModelRuntime provider request after a tool turn crosse
 			maxTokens: 128_000,
 		} as Model<Api>;
 		const ctx = {
+			cwd: tmpdir(),
 			model,
+			isProjectTrusted: () => false,
 			getContextUsage: () => ({ tokens: 10, contextWindow: model.contextWindow, percent: 0 }),
 			ui: { notify() {} },
 		} as unknown as ExtensionContext;

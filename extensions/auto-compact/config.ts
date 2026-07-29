@@ -47,7 +47,7 @@ type CompiledRule = {
 
 export type AutoCompactPolicy = {
 	configPath: string;
-	defaultThresholdTokens: number;
+	defaultThresholdTokens?: number;
 	rules: CompiledRule[];
 	compactionModel?: CompactionModelOverride;
 	error?: string;
@@ -178,7 +178,7 @@ export function parsePolicy(value: unknown, configPath = CONFIG_PATH): AutoCompa
 
 	const defaultThresholdTokens =
 		value.defaultThresholdTokens === undefined
-			? DEFAULT_THRESHOLD_TOKENS
+			? undefined
 			: parseThreshold(value.defaultThresholdTokens, "defaultThresholdTokens");
 	if (value.rules !== undefined && !Array.isArray(value.rules)) {
 		throw new Error("rules must be an array");
@@ -194,11 +194,7 @@ export function parsePolicy(value: unknown, configPath = CONFIG_PATH): AutoCompa
 
 export function loadPolicy(configPath = CONFIG_PATH): AutoCompactPolicy {
 	if (!existsSync(configPath)) {
-		return {
-			configPath,
-			defaultThresholdTokens: DEFAULT_THRESHOLD_TOKENS,
-			rules: [],
-		};
+		return { configPath, rules: [] };
 	}
 	try {
 		return parsePolicy(JSON.parse(readFileSync(configPath, "utf8")) as unknown, configPath);
@@ -206,7 +202,6 @@ export function loadPolicy(configPath = CONFIG_PATH): AutoCompactPolicy {
 		const message = error instanceof Error ? error.message : String(error);
 		return {
 			configPath,
-			defaultThresholdTokens: DEFAULT_THRESHOLD_TOKENS,
 			rules: [],
 			error: `Could not load auto-compact configuration at ${configPath}: ${message}`,
 		};
@@ -243,11 +238,11 @@ function matchesRule(rule: CompiledRule, model: ModelIdentity): boolean {
 	return matchesVersion(extractVersion(model.id), rule.version);
 }
 
-export function resolveThreshold(
+export function resolveConfiguredThreshold(
 	policy: AutoCompactPolicy,
 	model: ModelIdentity,
 	testThreshold?: number,
-): ThresholdResolution {
+): ThresholdResolution | undefined {
 	if (testThreshold !== undefined) {
 		return { thresholdTokens: testThreshold, source: "test override" };
 	}
@@ -255,5 +250,26 @@ export function resolveThreshold(
 	if (rule) {
 		return { thresholdTokens: rule.thresholdTokens, source: `rule "${rule.name}"` };
 	}
-	return { thresholdTokens: policy.defaultThresholdTokens, source: "default" };
+	if (policy.defaultThresholdTokens !== undefined) {
+		return { thresholdTokens: policy.defaultThresholdTokens, source: "default" };
+	}
+	return undefined;
+}
+
+/**
+ * The built-in default: 200,000 tokens, capped at Pi's native limit for
+ * models whose context window sits below the default.
+ */
+export function cappedDefaultThreshold(nativeThreshold: ThresholdResolution): ThresholdResolution {
+	if (nativeThreshold.thresholdTokens < DEFAULT_THRESHOLD_TOKENS) return nativeThreshold;
+	return { thresholdTokens: DEFAULT_THRESHOLD_TOKENS, source: "default" };
+}
+
+export function resolveThreshold(
+	policy: AutoCompactPolicy,
+	model: ModelIdentity,
+	fallback: ThresholdResolution,
+	testThreshold?: number,
+): ThresholdResolution {
+	return resolveConfiguredThreshold(policy, model, testThreshold) ?? fallback;
 }
