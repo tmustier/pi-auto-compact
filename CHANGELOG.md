@@ -1,0 +1,32 @@
+# Changelog
+
+## v0.1.5
+
+- Cap the built-in 200,000-token default at Pi's own compaction limit (`context window - reserved tokens`) so smaller-context models keep a reachable threshold.
+- Read Pi's effective merged global and project compaction settings.
+- Honour `compaction.enabled`: when Pi's native compaction is disabled, the extension does not trigger.
+- Show Pi's native compaction state and limit in `/auto-compact` output.
+- Recommend an explicit Codex Spark compaction configuration and shorten the README.
+
+Thanks to [@hughcars](https://github.com/hughcars) for the native-threshold work in [#4](https://github.com/tmustier/pi-auto-compact/pull/4).
+
+## v0.1.4
+
+- Support a dedicated compaction model (`compactionModel`): provider, model, thinking level and extra summary instructions.
+- Warn when a dedicated compaction model is enabled alongside other compaction extensions.
+
+## v0.1.3
+
+- Intercept Pi 0.80.8 ModelRuntime requests.
+
+## v0.1.2
+
+- Expose the active-model compaction policy to other extensions over the shared event bus.
+
+## v0.1.1
+
+- Direct overflow errors to configuration.
+
+## v0.1.0
+
+- Initial release: proactive native compaction after a tool-bearing turn crosses a configurable token threshold.

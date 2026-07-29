@@ -14,7 +14,7 @@ Pi packages have full system access. Review the source before installing.
 
 ## Recommended setup
 
-The extension works without configuration. It uses the active conversation model and a 200,000-token threshold. When a model's context window is smaller than that, the extension uses Pi's own limit for the model instead, so the threshold stays reachable.
+The extension works without configuration. It uses the active conversation model and a 200,000-token threshold. When a model's context window is smaller than that, the extension uses Pi's own limit for the model instead.
 
 We recommend using Codex Spark for compaction. This keeps the conversation model unchanged and tells the summary to preserve unfinished work.
 
