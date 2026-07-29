@@ -1,8 +1,20 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 export const DEFAULT_THRESHOLD_TOKENS = 200_000;
+export const RECOMMENDED_INSTRUCTIONS =
+	"Do not drop unfinished work, and do not make unfinished work sound finished. Keep every pending check, tentative finding, candidate, blocker and unresolved question in the summary. The next agent may otherwise act on unverified conclusions.";
+export const RECOMMENDED_CONFIG = {
+	defaultThresholdTokens: DEFAULT_THRESHOLD_TOKENS,
+	compactionModel: {
+		provider: "openai-codex",
+		model: "gpt-5.3-codex-spark",
+		thinking: "medium",
+		instructions: RECOMMENDED_INSTRUCTIONS,
+	},
+	rules: [],
+} as const;
 export const CONFIG_PATH = process.env.PI_AUTO_COMPACT_CONFIG
 	? resolve(process.env.PI_AUTO_COMPACT_CONFIG)
 	: join(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"), "auto-compact.json");
@@ -190,6 +202,24 @@ export function parsePolicy(value: unknown, configPath = CONFIG_PATH): AutoCompa
 		rules: (value.rules ?? []).map(parseRule),
 		compactionModel: parseCompactionModel(value.compactionModel),
 	};
+}
+
+export function writeInitialConfig(
+	setup: "recommended" | "active-model",
+	configPath = CONFIG_PATH,
+): "created" | "exists" {
+	mkdirSync(dirname(configPath), { recursive: true });
+	const config =
+		setup === "recommended"
+			? RECOMMENDED_CONFIG
+			: { defaultThresholdTokens: DEFAULT_THRESHOLD_TOKENS, rules: [] };
+	try {
+		writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, { flag: "wx" });
+		return "created";
+	} catch (error) {
+		if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") return "exists";
+		throw error;
+	}
 }
 
 export function loadPolicy(configPath = CONFIG_PATH): AutoCompactPolicy {

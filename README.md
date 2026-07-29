@@ -9,12 +9,17 @@ The default threshold is 200,000 estimated tokens. You can override it by API, p
 Install the public Git package:
 
 ```sh
-pi install git:github.com/tmustier/pi-auto-compact@v0.1.4
+pi install git:github.com/tmustier/pi-auto-compact
 ```
 
-Omit `@v0.1.4` if you want to track the latest commit on `main`.
+Add a release tag such as `@v0.1.4` if you prefer to pin a specific version.
 
-Restart Pi or run `/reload`. Use `/auto-compact` to check the loaded policy and current model threshold.
+Start Pi interactively after installation. If you do not already have an auto-compact configuration, a one-time setup prompt offers two choices:
+
+- **Recommended:** use GPT-5.3 Codex Spark with instructions that preserve unfinished and unverified work.
+- **Active model:** retain Pi's normal behavior of using the conversation model for compaction.
+
+The prompt never overwrites an existing configuration. Choosing **Decide later** changes nothing and shows the prompt again in the next interactive session. After choosing a setup, run `/reload`; then use `/auto-compact` to check the loaded policy and current model threshold. The recommended option requires `openai-codex/gpt-5.3-codex-spark` to be available and authenticated in Pi.
 
 Pi packages run with full system access. Review the extension source before installing it.
 
@@ -28,7 +33,7 @@ The extension reads this optional user configuration file:
 
 Set `PI_CODING_AGENT_DIR` to move the Pi agent directory. Set `PI_AUTO_COMPACT_CONFIG` to use a specific configuration file.
 
-If the file does not exist, the extension uses this policy:
+If the file does not exist, the interactive setup prompt offers to create it. Non-interactive Pi runs continue with this policy:
 
 ```json
 {
@@ -36,6 +41,8 @@ If the file does not exist, the extension uses this policy:
   "rules": []
 }
 ```
+
+To set up manually, copy [`config.example.json`](config.example.json) to `~/.pi/agent/auto-compact.json`. The example is the same recommended Spark configuration offered by the prompt.
 
 ## Configure the compaction model
 
@@ -85,7 +92,7 @@ This example uses 120,000 tokens for Anthropic model versions up to and includin
 
 The GPT rule does not constrain the provider or API. It therefore matches an ID such as `gpt-5.6-luna` whether it runs through OpenAI, Bedrock or another provider.
 
-Copy [`config.example.json`](config.example.json) to `~/.pi/agent/auto-compact.json` to use this policy. Run `/reload` after editing the file.
+Add threshold rules to your generated `~/.pi/agent/auto-compact.json` if you need model-specific limits. Run `/reload` after editing the file.
 
 ## Match models
 

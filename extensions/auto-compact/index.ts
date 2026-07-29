@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { compact, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
 	createAssistantMessageEventStream,
@@ -7,7 +8,7 @@ import {
 	type Context,
 	type Model,
 } from "@earendil-works/pi-ai/compat";
-import { loadPolicy, resolveThreshold, type ModelIdentity } from "./config.js";
+import { loadPolicy, resolveThreshold, writeInitialConfig, type ModelIdentity } from "./config.js";
 import { registerPolicyEvents } from "./policy-events.js";
 
 const TEST_THRESHOLD_ENV = "PI_AUTO_COMPACT_TEST_THRESHOLD";
@@ -86,6 +87,10 @@ function syntheticOverflow(model: Model<Api>, tokens: number, threshold: number,
 
 function modelIdentity(model: Model<Api>): ModelIdentity {
 	return { api: model.api, provider: model.provider, id: model.id };
+}
+
+export function shouldOfferSetup(mode: ExtensionContext["mode"], configPath: string): boolean {
+	return mode === "tui" && !existsSync(configPath);
 }
 
 export default function autoCompact(pi: ExtensionAPI) {
@@ -196,14 +201,37 @@ export default function autoCompact(pi: ExtensionAPI) {
 		},
 	});
 
-	pi.on("session_start", (_event, ctx) => {
-		if (policy.error) ctx.ui.notify(policy.error, "error");
+	pi.on("session_start", async (_event, ctx) => {
+		if (policy.error) {
+			ctx.ui.notify(policy.error, "error");
+			return;
+		}
 		if (policy.compactionModel) {
 			const overrideRef = `${policy.compactionModel.provider}/${policy.compactionModel.model}`;
 			ctx.ui.notify(
 				`auto-compact: dedicated compaction model ${overrideRef} is enabled; disable other compaction extensions because Pi runs every compaction handler`,
 				"warning",
 			);
+			return;
+		}
+		if (!shouldOfferSetup(ctx.mode, policy.configPath)) return;
+
+		const recommended = "Recommended: compact with GPT-5.3 Codex Spark";
+		const activeModel = "Compact with the active conversation model";
+		const choice = await ctx.ui.select("Set up auto-compact", [recommended, activeModel, "Decide later"]);
+		if (choice !== recommended && choice !== activeModel) return;
+
+		try {
+			const result = writeInitialConfig(choice === recommended ? "recommended" : "active-model", policy.configPath);
+			ctx.ui.notify(
+				result === "created"
+					? `auto-compact: saved setup to ${policy.configPath}; run /reload to activate it`
+					: `auto-compact: ${policy.configPath} was created by another process; run /reload to load it`,
+				"info",
+			);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			ctx.ui.notify(`auto-compact: could not save setup (${message})`, "error");
 		}
 	});
 	pi.on("session_before_compact", async (event, ctx) => {

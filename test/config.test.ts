@@ -1,15 +1,18 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { test } from "node:test";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createEventBus } from "@earendil-works/pi-coding-agent";
 import {
 	DEFAULT_THRESHOLD_TOKENS,
+	RECOMMENDED_CONFIG,
 	loadPolicy,
 	parsePolicy,
 	resolveThreshold,
+	writeInitialConfig,
 } from "../extensions/auto-compact/config.js";
-import { formatOverflowError } from "../extensions/auto-compact/index.js";
+import { formatOverflowError, shouldOfferSetup } from "../extensions/auto-compact/index.js";
 import {
 	AUTO_COMPACT_POLICY_EVENT,
 	AUTO_COMPACT_POLICY_REQUEST_EVENT,
@@ -175,6 +178,39 @@ test("returns defaults when the user configuration file is absent", () => {
 	assert.deepEqual(policy.rules, []);
 	assert.equal(policy.compactionModel, undefined);
 	assert.equal(policy.error, undefined);
+});
+
+test("offers first-run setup only in TUI mode when configuration is absent", () => {
+	const directory = mkdtempSync(join(tmpdir(), "auto-compact-prompt-"));
+	const configPath = join(directory, "auto-compact.json");
+	try {
+		assert.equal(shouldOfferSetup("tui", configPath), true);
+		assert.equal(shouldOfferSetup("rpc", configPath), false);
+		writeFileSync(configPath, "{}\n");
+		assert.equal(shouldOfferSetup("tui", configPath), false);
+	} finally {
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
+
+test("writes the recommended first-run configuration without overwriting an existing file", () => {
+	const directory = mkdtempSync(join(tmpdir(), "auto-compact-setup-"));
+	const configPath = join(directory, "nested", "auto-compact.json");
+	try {
+		assert.equal(writeInitialConfig("recommended", configPath), "created");
+		assert.deepEqual(JSON.parse(readFileSync(configPath, "utf8")), RECOMMENDED_CONFIG);
+
+		writeFileSync(configPath, '{"preserve":true}\n');
+		assert.equal(writeInitialConfig("active-model", configPath), "exists");
+		assert.deepEqual(JSON.parse(readFileSync(configPath, "utf8")), { preserve: true });
+	} finally {
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
+
+test("keeps the shipped example in sync with the recommended first-run configuration", () => {
+	const examplePath = join(import.meta.dirname, "..", "config.example.json");
+	assert.deepEqual(JSON.parse(readFileSync(examplePath, "utf8")), RECOMMENDED_CONFIG);
 });
 
 test("the overflow error directs users to configuration", () => {
