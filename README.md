@@ -46,12 +46,14 @@ Add rules when different models need different limits. Rules run from top to bot
   "defaultThresholdTokens": 200000,
   "rules": [
     {
+      "name": "Anthropic 4.6 and earlier",
       "provider": "anthropic",
       "modelPattern": "^claude-",
       "version": { "lte": "4.6" },
       "thresholdTokens": 120000
     },
     {
+      "name": "GPT 5.5 and newer",
       "modelPattern": "^gpt-",
       "version": { "gte": "5.5" },
       "thresholdTokens": 250000
