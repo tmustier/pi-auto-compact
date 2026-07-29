@@ -5,7 +5,7 @@ Pi auto-compact compacts long Pi sessions after a tool turn, then continues the 
 ## Install
 
 ```sh
-pi install git:github.com/tmustier/pi-auto-compact@v0.1.4
+pi install git:github.com/tmustier/pi-auto-compact@v0.1.5
 ```
 
 Restart Pi or run `/reload`. Run `/auto-compact` to see the active threshold and compaction model.
