@@ -1,45 +1,24 @@
 # Pi auto-compact
 
-Pi auto-compact persists native compaction after a tool-bearing turn crosses a configurable token threshold. Pi then continues the active request without adding a user continuation message.
-
-The default threshold is 200,000 estimated tokens. You can override it by API, provider, exact model, model ID pattern or numeric model version. You can also use a dedicated model for native compaction without changing the active conversation model.
+Pi auto-compact compacts long Pi sessions after a tool turn, then continues the same request. The default threshold is 200,000 estimated tokens.
 
 ## Install
-
-Install the public Git package:
 
 ```sh
 pi install git:github.com/tmustier/pi-auto-compact@v0.1.4
 ```
 
-Omit `@v0.1.4` if you want to track the latest commit on `main`.
+Restart Pi or run `/reload`. Run `/auto-compact` to see the active threshold and compaction model.
 
-Restart Pi or run `/reload`. Use `/auto-compact` to check the loaded policy and current model threshold.
+Pi packages have full system access. Review the source before installing.
 
-Pi packages run with full system access. Review the extension source before installing it.
+## Recommended setup
 
-## Configure thresholds
+The extension works without configuration. It uses the active conversation model and a 200,000-token threshold.
 
-The extension reads this optional user configuration file:
+We recommend using Codex Spark for compaction. This keeps the conversation model unchanged and tells the summary to preserve unfinished work.
 
-```text
-~/.pi/agent/auto-compact.json
-```
-
-Set `PI_CODING_AGENT_DIR` to move the Pi agent directory. Set `PI_AUTO_COMPACT_CONFIG` to use a specific configuration file.
-
-If the file does not exist, the extension uses this policy:
-
-```json
-{
-  "defaultThresholdTokens": 200000,
-  "rules": []
-}
-```
-
-## Configure the compaction model
-
-Add `compactionModel` to generate Pi's native summary with a dedicated model while leaving the active conversation model unchanged:
+Create `~/.pi/agent/auto-compact.json`:
 
 ```json
 {
@@ -54,27 +33,25 @@ Add `compactionModel` to generate Pi's native summary with a dedicated model whi
 }
 ```
 
-`provider` and `model` are required. `thinking` defaults to `medium` and accepts `off`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`. `instructions` is optional and is appended to any instructions supplied to `/compact`.
+The same configuration is available in [`config.example.json`](config.example.json). Spark must be available and authenticated in Pi.
 
-The extension displays the selected compaction model when compaction starts. If the model is unavailable, authentication cannot be resolved, the summary input exceeds its context window or summarization otherwise fails, it displays a warning and returns control to Pi. Pi then performs normal compaction with the active model.
+Run `/reload` after changing the file.
 
-Rules run from top to bottom. The first matching rule wins. Every matcher in that rule must match.
+## Customise thresholds
 
-This example uses 120,000 tokens for Anthropic model versions up to and including 4.6. It uses 250,000 tokens for GPT 5.5 and newer:
+Add rules when different models need different limits. Rules run from top to bottom. The first match wins.
 
 ```json
 {
   "defaultThresholdTokens": 200000,
   "rules": [
     {
-      "name": "Anthropic 4.6 and earlier",
       "provider": "anthropic",
       "modelPattern": "^claude-",
       "version": { "lte": "4.6" },
       "thresholdTokens": 120000
     },
     {
-      "name": "GPT 5.5 and newer",
       "modelPattern": "^gpt-",
       "version": { "gte": "5.5" },
       "thresholdTokens": 250000
@@ -83,122 +60,49 @@ This example uses 120,000 tokens for Anthropic model versions up to and includin
 }
 ```
 
-The GPT rule does not constrain the provider or API. It therefore matches an ID such as `gpt-5.6-luna` whether it runs through OpenAI, Bedrock or another provider.
+A rule can match:
 
-Copy [`config.example.json`](config.example.json) to `~/.pi/agent/auto-compact.json` to use this policy. Run `/reload` after editing the file.
+- `api`, `provider` or `model` by exact value
+- `providerPattern` or `modelPattern` with a JavaScript regular expression
+- the first numeric model version with `lt`, `lte`, `gt` or `gte`
 
-## Match models
+Each rule needs `thresholdTokens`. An optional `name` appears in `/auto-compact` output.
 
-A rule can contain these fields:
+Set `PI_AUTO_COMPACT_CONFIG` to use another config path. Set `PI_CODING_AGENT_DIR` to move the Pi agent directory.
 
-- `name`: label shown by `/auto-compact`
-- `api`: exact Pi API identifier
-- `provider`: exact provider identifier
-- `providerPattern`: JavaScript regular expression for the provider identifier
-- `model`: exact model identifier
-- `modelPattern`: JavaScript regular expression for the model identifier
-- `version`: bounds using `lt`, `lte`, `gt` or `gte`
-- `thresholdTokens`: non-negative integer threshold
+## Compaction model options
 
-Put exact exceptions before broad rules:
+`compactionModel` supports:
 
-```json
-{
-  "name": "Opus 4.8 exception",
-  "provider": "anthropic",
-  "model": "claude-opus-4-8",
-  "thresholdTokens": 275000
-}
-```
+- `provider` and `model`, both required
+- `thinking`: `off`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`
+- `instructions`: extra instructions appended to `/compact` instructions
 
-Version rules compare the first 2-part numeric version in the model ID:
+If the chosen model or its authentication is unavailable, Pi falls back to the active conversation model.
 
-- `claude-opus-4-8` becomes `4.8`
-- `claude-3-5-sonnet` becomes `3.5`
-- `gpt-5.6-sol` becomes `5.6`
+Disable other compaction extensions when you set `compactionModel`. Pi runs every registered compaction handler.
 
-This is numeric model ID ordering. It is not release-date metadata. Use `model` or `modelPattern` when an ID does not contain a 2-part numeric version.
+## How it behaves
 
-The extension validates the whole file on load. Unknown fields, malformed regular expressions, invalid versions and invalid thresholds produce a visible error. The extension then falls back to 200,000 tokens with no rules.
+After a tool turn crosses the threshold, the extension makes Pi handle the next request as a native context overflow. Pi saves the compaction and continues without adding a user message.
 
-## How continuation works
+The extension does not change the model context window, switch the conversation model or send the intercepted request upstream.
 
-The extension follows this sequence:
-
-```text
-finish tool batch
-→ persist tool results
-→ resolve the model threshold
-→ install a stream overlay for the active ModelRuntime provider
-→ intercept the next matching provider request
-→ emit a synthetic context-overflow response
-→ let Pi persist native compaction
-→ let Pi call agent.continue()
-```
-
-The interception checks the API, provider, model and completed tool result IDs. This stops Pi's separate compaction-summary request from consuming the one-shot trigger.
-
-The visible synthetic error looks like this:
-
-```text
-auto-compaction token limit exceeded (est. 203k > 200k threshold). Configure auto-compact in "/home/you/.pi/agent/auto-compact.json", then run /reload.
-```
-
-Pi recognises `token limit exceeded` as context overflow. It saves the error for history, removes it from active context, persists compaction and continues from the retained tool result.
-
-The extension does not:
-
-- change a model's logical context window
-- change the active conversation model
-- call `ctx.compact()`
-- abort the active run
-- add a user or custom continuation message
-- send the intercepted request to the upstream provider
-
-## Test a low threshold
-
-Override every resolved threshold for one Pi process:
+To test compaction with a low threshold:
 
 ```sh
 PI_AUTO_COMPACT_TEST_THRESHOLD=1 pi
 ```
 
-Use this only for controlled testing. A fresh session may still be too small for Pi to find a compaction cut point with the default `keepRecentTokens: 20000`; use a session with enough history or temporarily lower `keepRecentTokens` in project settings for the smoke test.
-
-## Extension integration
-
-Other Pi extensions can request the threshold resolved for a model through Pi's shared event bus. Emit `pi-auto-compact:policy-request:v1` with this payload:
-
-```json
-{
-  "protocolVersion": 1,
-  "model": {
-    "api": "openai-codex-responses",
-    "provider": "openai-codex",
-    "id": "gpt-5.6-sol"
-  }
-}
-```
-
-Auto-compact responds synchronously on `pi-auto-compact:policy:v1` with the matching model identity, `thresholdTokens`, policy source and configuration path. If auto-compact is not loaded, no response is emitted. This lets UI extensions use the active policy without duplicating its rule parser.
-
 ## Compatibility
 
-The extension requires Pi 0.82.1 or newer and is tested with Pi 0.82.1. Pi 0.80.8 moved live requests from the temporary `@earendil-works/pi-ai/compat` registry to `ModelRuntime`. The extension therefore uses `pi.registerProvider()` to add a `streamSimple` overlay to the active provider, while delegating ordinary requests and compaction summaries to the underlying API implementation.
+Requires Pi 0.82.1 or newer.
 
-Pi currently exposes one extension `streamSimple` overlay per provider. If another extension supplies a custom stream implementation for the same provider, loading auto-compact after it will replace that stream implementation. Built-in providers and providers configured through `models.json` continue to work.
+Pi allows one extension stream override per provider. Another extension can replace auto-compact's override, or auto-compact can replace one loaded earlier.
 
-After upgrading Pi, check that:
-
-- `/auto-compact` loads without a configuration error
-- the active ModelRuntime provider wraps when a threshold is crossed
-- Pi recognises the synthetic error as context overflow
-- the session contains a persisted compaction entry
-- Pi resumes without adding a user continuation message
+Other extensions can request the active threshold by emitting `pi-auto-compact:policy-request:v1`. Auto-compact responds on `pi-auto-compact:policy:v1` with the model, threshold, policy source and config path.
 
 ## Develop
-
-Install dependencies without lifecycle scripts:
 
 ```sh
 npm install --ignore-scripts
