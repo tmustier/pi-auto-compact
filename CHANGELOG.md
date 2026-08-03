@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.1.6
+
+- Generate dedicated-model summaries through the underlying API provider, bypassing runtime provider overlays that can interfere with compaction.
+- Add regression coverage for dedicated compaction when the runtime provider is wrapped.
+
 ## v0.1.5
 
 - Cap the built-in 200,000-token default at Pi's own compaction limit (`context window - reserved tokens`) so smaller-context models keep a reachable threshold.
