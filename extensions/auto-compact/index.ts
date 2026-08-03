@@ -253,8 +253,8 @@ export default function autoCompact(pi: ExtensionAPI) {
 			if (!auth.ok) throw new Error(auth.error);
 			const providerAuth = await ctx.modelRegistry.getProviderAuth(model.provider);
 			const requestModel = providerAuth?.auth.baseUrl ? { ...model, baseUrl: providerAuth.auth.baseUrl } : model;
-			const provider = ctx.modelRegistry.getProvider(model.provider);
-			if (!provider) throw new Error("runtime provider is not available");
+			const provider = getApiProvider(model.api);
+			if (!provider) throw new Error("API provider is not available");
 
 			ctx.ui.notify(`auto-compact: compacting with ${overrideRef} (${override.thinking} thinking)`, "info");
 			const customInstructions = [override.instructions, event.customInstructions].filter(Boolean).join("\n\n");

@@ -1,16 +1,103 @@
 import assert from "node:assert/strict";
+import { rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { test } from "node:test";
+import { join } from "node:path";
+import { after, test } from "node:test";
 import {
 	createEventBus,
 	type ExtensionAPI,
 	type ExtensionContext,
 	type ProviderConfig,
 } from "@earendil-works/pi-coding-agent";
-import type { Api, Model } from "@earendil-works/pi-ai/compat";
-import autoCompact from "../extensions/auto-compact/index.js";
+import { fauxAssistantMessage, registerFauxProvider, type Api, type Model } from "@earendil-works/pi-ai/compat";
 
 type EventHandler = (event: unknown, ctx: ExtensionContext) => unknown;
+
+const configPath = join(tmpdir(), `pi-auto-compact-${process.pid}-${Date.now()}.json`);
+const previousConfig = process.env.PI_AUTO_COMPACT_CONFIG;
+writeFileSync(
+	configPath,
+	JSON.stringify({
+		compactionModel: {
+			provider: "faux",
+			model: "faux-1",
+			thinking: "off",
+		},
+	}),
+);
+process.env.PI_AUTO_COMPACT_CONFIG = configPath;
+const { default: autoCompact } = await import("../extensions/auto-compact/index.js");
+after(() => {
+	rmSync(configPath, { force: true });
+	if (previousConfig === undefined) delete process.env.PI_AUTO_COMPACT_CONFIG;
+	else process.env.PI_AUTO_COMPACT_CONFIG = previousConfig;
+});
+
+test("dedicated compaction bypasses runtime provider overlays", async () => {
+	const faux = registerFauxProvider();
+	faux.setResponses([fauxAssistantMessage("dedicated summary")]);
+
+	try {
+		const handlers = new Map<string, EventHandler[]>();
+		const pi = {
+			events: createEventBus(),
+			on(event: string, handler: EventHandler) {
+				const registered = handlers.get(event) ?? [];
+				registered.push(handler);
+				handlers.set(event, registered);
+			},
+			registerCommand() {},
+		} as unknown as ExtensionAPI;
+		autoCompact(pi);
+
+		let runtimeProviderReads = 0;
+		const notifications: string[] = [];
+		const model = faux.getModel();
+		const ctx = {
+			model,
+			modelRegistry: {
+				find: (provider: string, id: string) =>
+					provider === model.provider && id === model.id ? model : undefined,
+				getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-key", headers: {} }),
+				getProviderAuth: async () => undefined,
+				getProvider: () => {
+					runtimeProviderReads += 1;
+					return {
+						streamSimple() {
+							throw new Error("broken runtime overlay");
+						},
+					};
+				},
+			},
+			ui: { notify(message: string) { notifications.push(message); } },
+		} as unknown as ExtensionContext;
+		const beforeCompact = handlers.get("session_before_compact")?.[0];
+		assert.ok(beforeCompact, "session_before_compact handler should be registered");
+
+		const result = (await beforeCompact(
+			{
+				preparation: {
+					firstKeptEntryId: "entry-keep",
+					messagesToSummarize: [{ role: "user", content: "summarize me", timestamp: Date.now() }],
+					turnPrefixMessages: [],
+					isSplitTurn: false,
+					tokensBefore: 100,
+					fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+					settings: { enabled: true, reserveTokens: 1_000, keepRecentTokens: 20 },
+				},
+				signal: new AbortController().signal,
+			},
+			ctx,
+		)) as { compaction?: { summary?: string } };
+
+		assert.ok(result, notifications.join("\n"));
+		assert.equal(runtimeProviderReads, 0);
+		assert.match(result.compaction?.summary ?? "", /dedicated summary/);
+		assert.equal(faux.state.callCount, 1);
+	} finally {
+		faux.unregister();
+	}
+});
 
 test("intercepts the next ModelRuntime provider request after a tool turn crosses the threshold", async () => {
 	const previousThreshold = process.env.PI_AUTO_COMPACT_TEST_THRESHOLD;
