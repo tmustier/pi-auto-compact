@@ -28,6 +28,18 @@ Create `~/.pi/agent/auto-compact.json`:
     "thinking": "medium",
     "instructions": "Do not drop unfinished work, and do not make unfinished work sound finished. Keep every pending check, tentative finding, candidate, blocker and unresolved question in the summary. The next agent may otherwise act on unverified conclusions."
   },
+  "fallbackCompactionModels": [
+    {
+      "provider": "openrouter",
+      "model": "google/gemini-3.1-flash-lite",
+      "thinking": "off"
+    },
+    {
+      "provider": "openai-codex",
+      "model": "gpt-5.6-luna",
+      "thinking": "low"
+    }
+  ],
   "rules": []
 }
 ```
@@ -79,7 +91,7 @@ Set `PI_AUTO_COMPACT_CONFIG` to use another config path. Set `PI_CODING_AGENT_DI
 - `thinking`: `off`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`
 - `instructions`: extra instructions appended to `/compact` instructions
 
-If the chosen model or its authentication is unavailable, Pi falls back to the active conversation model.
+`fallbackCompactionModels` is an optional ordered array with the same fields and requires `compactionModel`. If the primary model fails, the extension tries each fallback in order. A fallback without `instructions` inherits the primary model's instructions. If every configured model fails, Pi uses the active conversation model.
 
 Disable other compaction extensions when you set `compactionModel`. Pi runs every registered compaction handler.
 

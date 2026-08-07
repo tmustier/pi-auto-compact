@@ -98,6 +98,7 @@ function modelIdentity(model: Model<Api>): ModelIdentity {
 
 export default function autoCompact(pi: ExtensionAPI) {
 	const policy = loadPolicy();
+	const fallbackCompactionModels = policy.fallbackCompactionModels ?? [];
 	const testThreshold = readTestThreshold();
 	let armed: ArmedRequest | undefined;
 	let installCount = 0;
@@ -204,12 +205,19 @@ export default function autoCompact(pi: ExtensionAPI) {
 		const compactionModelText = policy.compactionModel
 			? `${policy.compactionModel.provider}/${policy.compactionModel.model} (${policy.compactionModel.thinking} thinking)`
 			: "active model";
+		const fallbackCompactionModelText =
+			fallbackCompactionModels.length > 0
+				? fallbackCompactionModels
+						.map((model) => `${model.provider}/${model.model} (${model.thinking} thinking)`)
+						.join(" → ")
+				: "active model";
 
 		return [
 			`Auto-compact config: ${policy.configPath}${policy.error ? ` (${policy.error})` : ""}`,
 			`Default threshold: ${policy.defaultThresholdTokens === undefined ? `tokens > min(${DEFAULT_THRESHOLD_TOKENS.toLocaleString()}, Pi native limit)` : `tokens > ${policy.defaultThresholdTokens.toLocaleString()}`}; rules: ${policy.rules.length}`,
 			`Pi native compaction: ${current ? `${current.native.enabled ? "enabled" : "disabled"}; tokens > ${current.native.thresholdTokens.toLocaleString()}` : "no model selected"}`,
 			`Compaction model: ${compactionModelText}`,
+			`Fallback compaction models: ${fallbackCompactionModelText}`,
 			`Current policy: ${currentPolicyText}${testThreshold === undefined ? "" : ` via ${TEST_THRESHOLD_ENV}`}`,
 			`Current estimated context: ${usageText}`,
 			`Provider interception: ModelRuntime overlay on demand; current provider ${currentWrapperActive ? "wrapped" : "delegating until threshold"}; ${installedProviders.size} provider wrapper(s); ${installCount} installation(s)${lastInstallError ? ` (${lastInstallError})` : ""}`,
@@ -233,50 +241,60 @@ export default function autoCompact(pi: ExtensionAPI) {
 		if (policy.error) ctx.ui.notify(policy.error, "error");
 		if (policy.compactionModel) {
 			const overrideRef = `${policy.compactionModel.provider}/${policy.compactionModel.model}`;
+			const fallbackRef = fallbackCompactionModels
+				.map((model) => `${model.provider}/${model.model}`)
+				.join(", then ");
 			ctx.ui.notify(
-				`auto-compact: dedicated compaction model ${overrideRef} is enabled; disable other compaction extensions because Pi runs every compaction handler`,
+				`auto-compact: dedicated compaction model ${overrideRef}${fallbackRef ? `, then ${fallbackRef}` : ""} is enabled; disable other compaction extensions because Pi runs every compaction handler`,
 				"warning",
 			);
 		}
 	});
 	pi.on("session_before_compact", async (event, ctx) => {
-		const override = policy.compactionModel;
-		if (!override) return;
+		const primary = policy.compactionModel;
+		if (!primary) return;
 
-		const overrideRef = `${override.provider}/${override.model}`;
+		const overrides = [primary, ...fallbackCompactionModels];
 		const activeRef = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "the active model";
-		try {
-			const model = ctx.modelRegistry.find(override.provider, override.model);
-			if (!model) throw new Error("model is not available");
+		for (const [index, override] of overrides.entries()) {
+			const overrideRef = `${override.provider}/${override.model}`;
+			try {
+				const model = ctx.modelRegistry.find(override.provider, override.model);
+				if (!model) throw new Error("model is not available");
 
-			const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-			if (!auth.ok) throw new Error(auth.error);
-			const providerAuth = await ctx.modelRegistry.getProviderAuth(model.provider);
-			const requestModel = providerAuth?.auth.baseUrl ? { ...model, baseUrl: providerAuth.auth.baseUrl } : model;
-			const provider = getApiProvider(model.api);
-			if (!provider) throw new Error("API provider is not available");
+				const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+				if (!auth.ok) throw new Error(auth.error);
+				const providerAuth = await ctx.modelRegistry.getProviderAuth(model.provider);
+				const requestModel = providerAuth?.auth.baseUrl ? { ...model, baseUrl: providerAuth.auth.baseUrl } : model;
+				const provider = getApiProvider(model.api);
+				if (!provider) throw new Error("API provider is not available");
 
-			ctx.ui.notify(`auto-compact: compacting with ${overrideRef} (${override.thinking} thinking)`, "info");
-			const customInstructions = [override.instructions, event.customInstructions].filter(Boolean).join("\n\n");
-			const result = await compact(
-				event.preparation,
-				requestModel,
-				auth.apiKey,
-				auth.headers,
-				customInstructions || undefined,
-				event.signal,
-				override.thinking,
-				provider.streamSimple.bind(provider),
-				auth.env,
-			);
-			return { compaction: result };
-		} catch (error) {
-			if (event.signal.aborted) return;
-			const message = error instanceof Error ? error.message : String(error);
-			ctx.ui.notify(
-				`auto-compact: ${overrideRef} compaction failed (${message}); falling back to ${activeRef}`,
-				"warning",
-			);
+				ctx.ui.notify(`auto-compact: compacting with ${overrideRef} (${override.thinking} thinking)`, "info");
+				const customInstructions = [override.instructions ?? primary.instructions, event.customInstructions]
+					.filter(Boolean)
+					.join("\n\n");
+				const result = await compact(
+					event.preparation,
+					requestModel,
+					auth.apiKey,
+					auth.headers,
+					customInstructions || undefined,
+					event.signal,
+					override.thinking,
+					provider.streamSimple.bind(provider),
+					auth.env,
+				);
+				return { compaction: result };
+			} catch (error) {
+				if (event.signal.aborted) return;
+				const message = error instanceof Error ? error.message : String(error);
+				const next = overrides[index + 1];
+				const nextRef = next ? `${next.provider}/${next.model}` : activeRef;
+				ctx.ui.notify(
+					`auto-compact: ${overrideRef} compaction failed (${message}); falling back to ${nextRef}`,
+					"warning",
+				);
+			}
 		}
 	});
 	pi.on("session_shutdown", () => {

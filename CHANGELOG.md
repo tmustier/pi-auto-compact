@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Support an ordered `fallbackCompactionModels` list before falling back to the active conversation model.
+
 ## v0.1.6
 
 - Generate dedicated-model summaries through the underlying API provider, bypassing runtime provider overlays that can interfere with compaction.

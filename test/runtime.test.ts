@@ -22,7 +22,20 @@ writeFileSync(
 			provider: "faux",
 			model: "faux-1",
 			thinking: "off",
+			instructions: "Preserve primary instructions.",
 		},
+		fallbackCompactionModels: [
+			{
+				provider: "faux",
+				model: "faux-2",
+				thinking: "off",
+			},
+			{
+				provider: "faux",
+				model: "faux-3",
+				thinking: "off",
+			},
+		],
 	}),
 );
 process.env.PI_AUTO_COMPACT_CONFIG = configPath;
@@ -34,7 +47,7 @@ after(() => {
 });
 
 test("dedicated compaction bypasses runtime provider overlays", async () => {
-	const faux = registerFauxProvider();
+	const faux = registerFauxProvider({ models: [{ id: "faux-1" }, { id: "faux-2" }, { id: "faux-3" }] });
 	faux.setResponses([fauxAssistantMessage("dedicated summary")]);
 
 	try {
@@ -94,6 +107,87 @@ test("dedicated compaction bypasses runtime provider overlays", async () => {
 		assert.equal(runtimeProviderReads, 0);
 		assert.match(result.compaction?.summary ?? "", /dedicated summary/);
 		assert.equal(faux.state.callCount, 1);
+	} finally {
+		faux.unregister();
+	}
+});
+
+test("tries configured fallback compaction models in order", async () => {
+	const faux = registerFauxProvider({ models: [{ id: "faux-1" }, { id: "faux-2" }, { id: "faux-3" }] });
+	let inheritedPrimaryInstructions = false;
+	faux.setResponses([
+		(context) => {
+			inheritedPrimaryInstructions = JSON.stringify(context).includes("Preserve primary instructions.");
+			return fauxAssistantMessage("fallback summary");
+		},
+	]);
+
+	try {
+		const handlers = new Map<string, EventHandler[]>();
+		const pi = {
+			events: createEventBus(),
+			on(event: string, handler: EventHandler) {
+				const registered = handlers.get(event) ?? [];
+				registered.push(handler);
+				handlers.set(event, registered);
+			},
+			registerCommand() {},
+		} as unknown as ExtensionAPI;
+		autoCompact(pi);
+
+		let authCalls = 0;
+		let failAll = false;
+		const attemptedModels: string[] = [];
+		const notifications: string[] = [];
+		const model = faux.getModel();
+		const ctx = {
+			model: { ...model, provider: "active", id: "conversation" },
+			modelRegistry: {
+				find: (provider: string, id: string) => provider === model.provider ? faux.getModel(id) : undefined,
+				getApiKeyAndHeaders: async (requestedModel: Model<Api>) => {
+					authCalls += 1;
+					attemptedModels.push(requestedModel.id);
+					return failAll || authCalls % 3 !== 0
+						? { ok: false as const, error: `model ${authCalls} quota exhausted` }
+						: { ok: true as const, apiKey: "test-key", headers: {} };
+				},
+				getProviderAuth: async () => undefined,
+			},
+			ui: { notify(message: string) { notifications.push(message); } },
+		} as unknown as ExtensionContext;
+		const beforeCompact = handlers.get("session_before_compact")?.[0];
+		assert.ok(beforeCompact, "session_before_compact handler should be registered");
+
+		const compactionEvent = {
+			preparation: {
+				firstKeptEntryId: "entry-keep",
+				messagesToSummarize: [{ role: "user", content: "summarize me", timestamp: Date.now() }],
+				turnPrefixMessages: [],
+				isSplitTurn: false,
+				tokensBefore: 100,
+				fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+				settings: { enabled: true, reserveTokens: 1_000, keepRecentTokens: 20 },
+			},
+			signal: new AbortController().signal,
+		};
+		const result = (await beforeCompact(compactionEvent, ctx)) as { compaction?: { summary?: string } };
+
+		assert.equal(authCalls, 3);
+		assert.deepEqual(attemptedModels, ["faux-1", "faux-2", "faux-3"]);
+		assert.equal(faux.state.callCount, 1);
+		assert.equal(inheritedPrimaryInstructions, true);
+		assert.match(result.compaction?.summary ?? "", /fallback summary/);
+		assert.equal(
+			notifications.filter((message) => /quota exhausted.*falling back to faux\/faux-[23]/.test(message)).length,
+			2,
+		);
+
+		failAll = true;
+		const failedResult = await beforeCompact(compactionEvent, ctx);
+		assert.equal(failedResult, undefined);
+		assert.equal(authCalls, 6);
+		assert.deepEqual(attemptedModels.slice(3), ["faux-1", "faux-2", "faux-3"]);
+		assert.match(notifications.at(-1) ?? "", /falling back to active\/conversation/);
 	} finally {
 		faux.unregister();
 	}
