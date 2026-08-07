@@ -179,6 +179,21 @@ test("parses a compaction model override", () => {
 		thinking: "medium",
 		instructions: "Keep unfinished work unfinished.",
 	});
+	assert.deepEqual(policy.fallbackCompactionModels, []);
+});
+
+test("parses ordered fallback compaction models", () => {
+	const policy = parsePolicy({
+		compactionModel: { provider: "openrouter", model: "google/gemini-3.1-flash-lite", thinking: "off" },
+		fallbackCompactionModels: [
+			{ provider: "openai-codex", model: "gpt-5.6-luna", thinking: "low" },
+			{ provider: "anthropic", model: "claude-haiku-4-5" },
+		],
+	});
+	assert.deepEqual(policy.fallbackCompactionModels, [
+		{ provider: "openai-codex", model: "gpt-5.6-luna", thinking: "low", instructions: undefined },
+		{ provider: "anthropic", model: "claude-haiku-4-5", thinking: "medium", instructions: undefined },
+	]);
 });
 
 test("defaults configured compaction model thinking to medium", () => {
@@ -197,6 +212,7 @@ test("uses Pi's native threshold when no configured default exists", () => {
 	);
 	assert.deepEqual(policy.rules, []);
 	assert.equal(policy.compactionModel, undefined);
+	assert.deepEqual(policy.fallbackCompactionModels, []);
 	assert.equal(policy.error, undefined);
 });
 
@@ -215,6 +231,19 @@ test("rejects malformed configuration", () => {
 	assert.throws(
 		() => parsePolicy({ compactionModel: { provider: "openai-codex", model: "spark", thinking: "extreme" } }),
 		/compactionModel\.thinking/,
+	);
+	assert.throws(() => parsePolicy({ fallbackCompactionModels: {} }), /must be an array/);
+	assert.throws(
+		() => parsePolicy({ fallbackCompactionModels: [{ provider: "openai-codex", model: "gpt-5.6-luna" }] }),
+		/requires compactionModel/,
+	);
+	assert.throws(
+		() =>
+			parsePolicy({
+				compactionModel: { provider: "openrouter", model: "google/gemini-3.1-flash-lite" },
+				fallbackCompactionModels: [{ provider: "openai-codex" }],
+			}),
+		/fallbackCompactionModels\[0\]\.model is required/,
 	);
 	assert.throws(() => parsePolicy({ unexpected: true }), /unknown field/);
 });

@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.1.7
+
+- Support an ordered `fallbackCompactionModels` list before falling back to the active conversation model.
+- Show the dedicated model, thinking level and provider in Pi's working message while compaction runs.
+
 ## v0.1.6
 
 - Generate dedicated-model summaries through the underlying API provider, bypassing runtime provider overlays that can interfere with compaction.

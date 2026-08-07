@@ -50,6 +50,7 @@ export type AutoCompactPolicy = {
 	defaultThresholdTokens?: number;
 	rules: CompiledRule[];
 	compactionModel?: CompactionModelOverride;
+	fallbackCompactionModels?: CompactionModelOverride[];
 	error?: string;
 };
 
@@ -130,21 +131,21 @@ function parseVersionRange(value: unknown, path: string): VersionRange | undefin
 	return range;
 }
 
-function parseCompactionModel(value: unknown): CompactionModelOverride | undefined {
+function parseCompactionModel(value: unknown, path: string): CompactionModelOverride | undefined {
 	if (value === undefined) return undefined;
 	if (!isRecord(value)) {
-		throw new Error("compactionModel must be an object");
+		throw new Error(`${path} must be an object`);
 	}
-	assertKnownKeys(value, ["provider", "model", "thinking", "instructions"], "compactionModel");
+	assertKnownKeys(value, ["provider", "model", "thinking", "instructions"], path);
 	const thinking = value.thinking ?? "medium";
 	if (!["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(String(thinking))) {
-		throw new Error("compactionModel.thinking must be one of off, minimal, low, medium, high, xhigh, or max");
+		throw new Error(`${path}.thinking must be one of off, minimal, low, medium, high, xhigh, or max`);
 	}
 	return {
-		provider: parseRequiredString(value.provider, "compactionModel.provider"),
-		model: parseRequiredString(value.model, "compactionModel.model"),
+		provider: parseRequiredString(value.provider, `${path}.provider`),
+		model: parseRequiredString(value.model, `${path}.model`),
 		thinking: thinking as CompactionThinkingLevel,
-		instructions: parseOptionalString(value.instructions, "compactionModel.instructions"),
+		instructions: parseOptionalString(value.instructions, `${path}.instructions`),
 	};
 }
 
@@ -174,7 +175,17 @@ export function parsePolicy(value: unknown, configPath = CONFIG_PATH): AutoCompa
 	if (!isRecord(value)) {
 		throw new Error("configuration must be a JSON object");
 	}
-	assertKnownKeys(value, ["defaultThresholdTokens", "rules", "compactionModel"], "configuration");
+	assertKnownKeys(
+		value,
+		["defaultThresholdTokens", "rules", "compactionModel", "fallbackCompactionModels"],
+		"configuration",
+	);
+	if (value.fallbackCompactionModels !== undefined && !Array.isArray(value.fallbackCompactionModels)) {
+		throw new Error("fallbackCompactionModels must be an array");
+	}
+	if ((value.fallbackCompactionModels?.length ?? 0) > 0 && value.compactionModel === undefined) {
+		throw new Error("fallbackCompactionModels requires compactionModel");
+	}
 
 	const defaultThresholdTokens =
 		value.defaultThresholdTokens === undefined
@@ -188,13 +199,19 @@ export function parsePolicy(value: unknown, configPath = CONFIG_PATH): AutoCompa
 		configPath,
 		defaultThresholdTokens,
 		rules: (value.rules ?? []).map(parseRule),
-		compactionModel: parseCompactionModel(value.compactionModel),
+		compactionModel: parseCompactionModel(value.compactionModel, "compactionModel"),
+		fallbackCompactionModels: (value.fallbackCompactionModels ?? []).map((model, index) => {
+			const path = `fallbackCompactionModels[${index}]`;
+			const parsed = parseCompactionModel(model, path);
+			if (!parsed) throw new Error(`${path} must be an object`);
+			return parsed;
+		}),
 	};
 }
 
 export function loadPolicy(configPath = CONFIG_PATH): AutoCompactPolicy {
 	if (!existsSync(configPath)) {
-		return { configPath, rules: [] };
+		return { configPath, rules: [], fallbackCompactionModels: [] };
 	}
 	try {
 		return parsePolicy(JSON.parse(readFileSync(configPath, "utf8")) as unknown, configPath);
@@ -203,6 +220,7 @@ export function loadPolicy(configPath = CONFIG_PATH): AutoCompactPolicy {
 		return {
 			configPath,
 			rules: [],
+			fallbackCompactionModels: [],
 			error: `Could not load auto-compact configuration at ${configPath}: ${message}`,
 		};
 	}
