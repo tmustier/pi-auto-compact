@@ -256,45 +256,52 @@ export default function autoCompact(pi: ExtensionAPI) {
 
 		const overrides = [primary, ...fallbackCompactionModels];
 		const activeRef = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "the active model";
-		for (const [index, override] of overrides.entries()) {
-			const overrideRef = `${override.provider}/${override.model}`;
-			try {
-				const model = ctx.modelRegistry.find(override.provider, override.model);
-				if (!model) throw new Error("model is not available");
-
-				const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-				if (!auth.ok) throw new Error(auth.error);
-				const providerAuth = await ctx.modelRegistry.getProviderAuth(model.provider);
-				const requestModel = providerAuth?.auth.baseUrl ? { ...model, baseUrl: providerAuth.auth.baseUrl } : model;
-				const provider = getApiProvider(model.api);
-				if (!provider) throw new Error("API provider is not available");
-
-				ctx.ui.notify(`auto-compact: compacting with ${overrideRef} (${override.thinking} thinking)`, "info");
-				const customInstructions = [override.instructions ?? primary.instructions, event.customInstructions]
-					.filter(Boolean)
-					.join("\n\n");
-				const result = await compact(
-					event.preparation,
-					requestModel,
-					auth.apiKey,
-					auth.headers,
-					customInstructions || undefined,
-					event.signal,
-					override.thinking,
-					provider.streamSimple.bind(provider),
-					auth.env,
+		try {
+			for (const [index, override] of overrides.entries()) {
+				const overrideRef = `${override.provider}/${override.model}`;
+				ctx.ui.setWorkingMessage(
+					`Compacting with ${override.model} on ${override.thinking} (${override.provider})...`,
 				);
-				return { compaction: result };
-			} catch (error) {
-				if (event.signal.aborted) return;
-				const message = error instanceof Error ? error.message : String(error);
-				const next = overrides[index + 1];
-				const nextRef = next ? `${next.provider}/${next.model}` : activeRef;
-				ctx.ui.notify(
-					`auto-compact: ${overrideRef} compaction failed (${message}); falling back to ${nextRef}`,
-					"warning",
-				);
+				try {
+					const model = ctx.modelRegistry.find(override.provider, override.model);
+					if (!model) throw new Error("model is not available");
+
+					const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+					if (!auth.ok) throw new Error(auth.error);
+					const providerAuth = await ctx.modelRegistry.getProviderAuth(model.provider);
+					const requestModel = providerAuth?.auth.baseUrl ? { ...model, baseUrl: providerAuth.auth.baseUrl } : model;
+					const provider = getApiProvider(model.api);
+					if (!provider) throw new Error("API provider is not available");
+
+					ctx.ui.notify(`auto-compact: compacting with ${overrideRef} (${override.thinking} thinking)`, "info");
+					const customInstructions = [override.instructions ?? primary.instructions, event.customInstructions]
+						.filter(Boolean)
+						.join("\n\n");
+					const result = await compact(
+						event.preparation,
+						requestModel,
+						auth.apiKey,
+						auth.headers,
+						customInstructions || undefined,
+						event.signal,
+						override.thinking,
+						provider.streamSimple.bind(provider),
+						auth.env,
+					);
+					return { compaction: result };
+				} catch (error) {
+					if (event.signal.aborted) return;
+					const message = error instanceof Error ? error.message : String(error);
+					const next = overrides[index + 1];
+					const nextRef = next ? `${next.provider}/${next.model}` : activeRef;
+					ctx.ui.notify(
+						`auto-compact: ${overrideRef} compaction failed (${message}); falling back to ${nextRef}`,
+						"warning",
+					);
+				}
 			}
+		} finally {
+			ctx.ui.setWorkingMessage();
 		}
 	});
 	pi.on("session_shutdown", () => {

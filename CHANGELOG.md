@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Support an ordered `fallbackCompactionModels` list before falling back to the active conversation model.
+- Show the dedicated model, thinking level and provider in Pi's working message while compaction runs.
 
 ## v0.1.6
 

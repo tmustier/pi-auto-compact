@@ -82,7 +82,10 @@ test("dedicated compaction bypasses runtime provider overlays", async () => {
 					};
 				},
 			},
-			ui: { notify(message: string) { notifications.push(message); } },
+			ui: {
+				notify(message: string) { notifications.push(message); },
+				setWorkingMessage() {},
+			},
 		} as unknown as ExtensionContext;
 		const beforeCompact = handlers.get("session_before_compact")?.[0];
 		assert.ok(beforeCompact, "session_before_compact handler should be registered");
@@ -139,6 +142,7 @@ test("tries configured fallback compaction models in order", async () => {
 		let failAll = false;
 		const attemptedModels: string[] = [];
 		const notifications: string[] = [];
+		const workingMessages: Array<string | undefined> = [];
 		const model = faux.getModel();
 		const ctx = {
 			model: { ...model, provider: "active", id: "conversation" },
@@ -153,7 +157,10 @@ test("tries configured fallback compaction models in order", async () => {
 				},
 				getProviderAuth: async () => undefined,
 			},
-			ui: { notify(message: string) { notifications.push(message); } },
+			ui: {
+				notify(message: string) { notifications.push(message); },
+				setWorkingMessage(message?: string) { workingMessages.push(message); },
+			},
 		} as unknown as ExtensionContext;
 		const beforeCompact = handlers.get("session_before_compact")?.[0];
 		assert.ok(beforeCompact, "session_before_compact handler should be registered");
@@ -177,6 +184,12 @@ test("tries configured fallback compaction models in order", async () => {
 		assert.equal(faux.state.callCount, 1);
 		assert.equal(inheritedPrimaryInstructions, true);
 		assert.match(result.compaction?.summary ?? "", /fallback summary/);
+		assert.deepEqual(workingMessages, [
+			"Compacting with faux-1 on off (faux)...",
+			"Compacting with faux-2 on off (faux)...",
+			"Compacting with faux-3 on off (faux)...",
+			undefined,
+		]);
 		assert.equal(
 			notifications.filter((message) => /quota exhausted.*falling back to faux\/faux-[23]/.test(message)).length,
 			2,
@@ -187,6 +200,12 @@ test("tries configured fallback compaction models in order", async () => {
 		assert.equal(failedResult, undefined);
 		assert.equal(authCalls, 6);
 		assert.deepEqual(attemptedModels.slice(3), ["faux-1", "faux-2", "faux-3"]);
+		assert.deepEqual(workingMessages.slice(4), [
+			"Compacting with faux-1 on off (faux)...",
+			"Compacting with faux-2 on off (faux)...",
+			"Compacting with faux-3 on off (faux)...",
+			undefined,
+		]);
 		assert.match(notifications.at(-1) ?? "", /falling back to active\/conversation/);
 	} finally {
 		faux.unregister();
