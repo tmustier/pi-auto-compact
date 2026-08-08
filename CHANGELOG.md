@@ -1,9 +1,10 @@
 # Changelog
 
-## Unreleased
+## v0.1.9
 
 - Show dedicated model and thinking progress in Pi's existing compaction spinner, preserving reason-specific labels.
 - Normalize nullable provider headers for compatibility with current Pi releases.
+- Update Pi development dependencies to 0.84.1 to resolve transitive security advisories.
 
 ## v0.1.8
 
