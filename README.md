@@ -93,6 +93,8 @@ Set `PI_AUTO_COMPACT_CONFIG` to use another config path. Set `PI_CODING_AGENT_DI
 
 `fallbackCompactionModels` is an optional ordered array with the same fields and requires `compactionModel`. If the primary model fails, the extension tries each fallback in order. A fallback without `instructions` inherits the primary model's instructions. If every configured model fails, Pi uses the active conversation model.
 
+In interactive mode, dedicated-model progress appears in Pi's existing compaction spinner rather than as a separate notification. Manual `/compact` runs retain Pi's `Compacting context` label, while threshold and overflow compactions retain Pi's automatic labels. The spinner also shows the selected model and thinking level.
+
 For OpenRouter models, append `:nitro` to prioritize the highest-throughput inference provider or `:floor` to prioritize price. Auto-compact resolves authentication and metadata from the base model, then sends the variant suffix to OpenRouter.
 
 Disable other compaction extensions when you set `compactionModel`. Pi runs every registered compaction handler.

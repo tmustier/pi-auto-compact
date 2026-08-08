@@ -8,6 +8,11 @@ import {
 	type Model,
 } from "@earendil-works/pi-ai/compat";
 import {
+	CompactionStatusBridge,
+	formatCompactionProgressMessage,
+	formatDefaultCompactionMessage,
+} from "./compaction-status.js";
+import {
 	cappedDefaultThreshold,
 	DEFAULT_THRESHOLD_TOKENS,
 	loadPolicy,
@@ -17,6 +22,7 @@ import {
 } from "./config.js";
 import { loadNativeCompactionThreshold } from "./native-threshold.js";
 import { registerPolicyEvents } from "./policy-events.js";
+import { normalizeProviderHeaders } from "./provider-headers.js";
 
 const TEST_THRESHOLD_ENV = "PI_AUTO_COMPACT_TEST_THRESHOLD";
 
@@ -112,6 +118,7 @@ export default function autoCompact(pi: ExtensionAPI) {
 	let armedRequestMismatchCount = 0;
 	let lastToolTurn = "none";
 	let activeContext: ExtensionContext | undefined;
+	const compactionStatus = new CompactionStatusBridge();
 	const installedProviders = new Map<string, Api>();
 
 	function resolveRuntimeThreshold(ctx: ExtensionContext, model: Model<Api>) {
@@ -240,6 +247,7 @@ export default function autoCompact(pi: ExtensionAPI) {
 		activeContext = ctx;
 		if (policy.error) ctx.ui.notify(policy.error, "error");
 		if (policy.compactionModel) {
+			compactionStatus.capture(ctx);
 			const overrideRef = `${policy.compactionModel.provider}/${policy.compactionModel.model}`;
 			const fallbackRef = fallbackCompactionModels
 				.map((model) => `${model.provider}/${model.model}`)
@@ -254,14 +262,14 @@ export default function autoCompact(pi: ExtensionAPI) {
 		const primary = policy.compactionModel;
 		if (!primary) return;
 
+		compactionStatus.capture(ctx);
 		const overrides = [primary, ...fallbackCompactionModels];
 		const activeRef = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "the active model";
+		let providedCompaction = false;
 		try {
 			for (const [index, override] of overrides.entries()) {
 				const overrideRef = `${override.provider}/${override.model}`;
-				ctx.ui.setWorkingMessage(
-					`Compacting with ${override.model} on ${override.thinking} (${override.provider})...`,
-				);
+				compactionStatus.update(formatCompactionProgressMessage(event.reason, overrideRef, override.thinking));
 				try {
 					let model = ctx.modelRegistry.find(override.provider, override.model);
 					if (!model && override.provider === "openrouter") {
@@ -281,7 +289,6 @@ export default function autoCompact(pi: ExtensionAPI) {
 					const provider = getApiProvider(model.api);
 					if (!provider) throw new Error("API provider is not available");
 
-					ctx.ui.notify(`auto-compact: compacting with ${overrideRef} (${override.thinking} thinking)`, "info");
 					const customInstructions = [override.instructions ?? primary.instructions, event.customInstructions]
 						.filter(Boolean)
 						.join("\n\n");
@@ -289,13 +296,14 @@ export default function autoCompact(pi: ExtensionAPI) {
 						event.preparation,
 						requestModel,
 						auth.apiKey,
-						auth.headers,
+						normalizeProviderHeaders(auth.headers),
 						customInstructions || undefined,
 						event.signal,
 						override.thinking,
 						provider.streamSimple.bind(provider),
 						auth.env,
 					);
+					providedCompaction = true;
 					return { compaction: result };
 				} catch (error) {
 					if (event.signal.aborted) return;
@@ -309,11 +317,14 @@ export default function autoCompact(pi: ExtensionAPI) {
 				}
 			}
 		} finally {
-			ctx.ui.setWorkingMessage();
+			if (!providedCompaction && !event.signal.aborted) {
+				compactionStatus.update(formatDefaultCompactionMessage(event.reason));
+			}
 		}
 	});
 	pi.on("session_shutdown", () => {
 		activeContext = undefined;
+		compactionStatus.clear();
 		unregisterPolicyEvents();
 	});
 
