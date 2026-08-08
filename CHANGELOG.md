@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Show dedicated model and thinking progress in Pi's existing compaction spinner, preserving reason-specific labels.
+- Normalize nullable provider headers for compatibility with current Pi releases.
+
 ## v0.1.8
 
 - Support OpenRouter `:nitro` and `:floor` model variants for dedicated compaction models.
