@@ -8,7 +8,7 @@
   "fallbackCompactionModels": [
     {
       "provider": "openrouter",
-      "model": "google/gemini-3.1-flash-lite",
+      "model": "google/gemini-3.1-flash-lite:nitro",
       "thinking": "off"
     },
     {

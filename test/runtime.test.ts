@@ -19,20 +19,20 @@ writeFileSync(
 	configPath,
 	JSON.stringify({
 		compactionModel: {
-			provider: "faux",
-			model: "faux-1",
+			provider: "openrouter",
+			model: "faux-1:nitro",
 			thinking: "off",
 			instructions: "Preserve primary instructions.",
 		},
 		fallbackCompactionModels: [
 			{
-				provider: "faux",
-				model: "faux-2",
+				provider: "openrouter",
+				model: "faux-2:floor",
 				thinking: "off",
 			},
 			{
-				provider: "faux",
-				model: "faux-3",
+				provider: "openrouter",
+				model: "faux-3:nitro",
 				thinking: "off",
 			},
 		],
@@ -47,8 +47,17 @@ after(() => {
 });
 
 test("dedicated compaction bypasses runtime provider overlays", async () => {
-	const faux = registerFauxProvider({ models: [{ id: "faux-1" }, { id: "faux-2" }, { id: "faux-3" }] });
-	faux.setResponses([fauxAssistantMessage("dedicated summary")]);
+	const faux = registerFauxProvider({
+		provider: "openrouter",
+		models: [{ id: "faux-1" }, { id: "faux-2" }, { id: "faux-3" }],
+	});
+	let requestModelId: string | undefined;
+	faux.setResponses([
+		(_context, _options, _state, requestModel) => {
+			requestModelId = requestModel.id;
+			return fauxAssistantMessage("dedicated summary");
+		},
+	]);
 
 	try {
 		const handlers = new Map<string, EventHandler[]>();
@@ -110,17 +119,23 @@ test("dedicated compaction bypasses runtime provider overlays", async () => {
 		assert.equal(runtimeProviderReads, 0);
 		assert.match(result.compaction?.summary ?? "", /dedicated summary/);
 		assert.equal(faux.state.callCount, 1);
+		assert.equal(requestModelId, "faux-1:nitro");
 	} finally {
 		faux.unregister();
 	}
 });
 
 test("tries configured fallback compaction models in order", async () => {
-	const faux = registerFauxProvider({ models: [{ id: "faux-1" }, { id: "faux-2" }, { id: "faux-3" }] });
+	const faux = registerFauxProvider({
+		provider: "openrouter",
+		models: [{ id: "faux-1" }, { id: "faux-2" }, { id: "faux-3" }],
+	});
 	let inheritedPrimaryInstructions = false;
+	let requestModelId: string | undefined;
 	faux.setResponses([
-		(context) => {
+		(context, _options, _state, requestModel) => {
 			inheritedPrimaryInstructions = JSON.stringify(context).includes("Preserve primary instructions.");
+			requestModelId = requestModel.id;
 			return fauxAssistantMessage("fallback summary");
 		},
 	]);
@@ -183,15 +198,17 @@ test("tries configured fallback compaction models in order", async () => {
 		assert.deepEqual(attemptedModels, ["faux-1", "faux-2", "faux-3"]);
 		assert.equal(faux.state.callCount, 1);
 		assert.equal(inheritedPrimaryInstructions, true);
+		assert.equal(requestModelId, "faux-3:nitro");
 		assert.match(result.compaction?.summary ?? "", /fallback summary/);
 		assert.deepEqual(workingMessages, [
-			"Compacting with faux-1 on off (faux)...",
-			"Compacting with faux-2 on off (faux)...",
-			"Compacting with faux-3 on off (faux)...",
+			"Compacting with faux-1:nitro on off (openrouter)...",
+			"Compacting with faux-2:floor on off (openrouter)...",
+			"Compacting with faux-3:nitro on off (openrouter)...",
 			undefined,
 		]);
 		assert.equal(
-			notifications.filter((message) => /quota exhausted.*falling back to faux\/faux-[23]/.test(message)).length,
+			notifications.filter((message) => /quota exhausted.*falling back to openrouter\/faux-[23]/.test(message))
+				.length,
 			2,
 		);
 
@@ -201,9 +218,9 @@ test("tries configured fallback compaction models in order", async () => {
 		assert.equal(authCalls, 6);
 		assert.deepEqual(attemptedModels.slice(3), ["faux-1", "faux-2", "faux-3"]);
 		assert.deepEqual(workingMessages.slice(4), [
-			"Compacting with faux-1 on off (faux)...",
-			"Compacting with faux-2 on off (faux)...",
-			"Compacting with faux-3 on off (faux)...",
+			"Compacting with faux-1:nitro on off (openrouter)...",
+			"Compacting with faux-2:floor on off (openrouter)...",
+			"Compacting with faux-3:nitro on off (openrouter)...",
 			undefined,
 		]);
 		assert.match(notifications.at(-1) ?? "", /falling back to active\/conversation/);

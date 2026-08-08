@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.1.8
+
+- Support OpenRouter `:nitro` and `:floor` model variants for dedicated compaction models.
+
 ## v0.1.7
 
 - Support an ordered `fallbackCompactionModels` list before falling back to the active conversation model.
