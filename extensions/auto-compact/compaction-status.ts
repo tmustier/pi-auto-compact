@@ -1,34 +1,19 @@
 import {
 	keyText,
-	type ExtensionContext,
 	type SessionBeforeCompactEvent,
 } from "@earendil-works/pi-coding-agent";
 import type { CompactionThinkingLevel } from "./config.js";
 
 type CompactionReason = SessionBeforeCompactEvent["reason"];
-type MutableCompactionIndicator = {
+type CompactionIndicator = {
 	kind: "compaction";
 	setMessage(message: string): void;
 };
 
-const TUI_CAPTURE_WIDGET_KEY = "pi-auto-compact:tui-capture";
-const EMPTY_TUI_COMPONENT = {
-	render: (_width: number): string[] => [],
-	invalidate: (): void => {},
-};
-
-function isObject(value: unknown): value is object {
-	return typeof value === "object" && value !== null;
-}
-
-function getChildComponents(value: unknown): readonly unknown[] {
-	if (!isObject(value) || !("children" in value) || !Array.isArray(value.children)) return [];
-	return value.children;
-}
-
-function isMutableCompactionIndicator(value: unknown): value is MutableCompactionIndicator {
+function isCompactionIndicator(value: unknown): value is CompactionIndicator {
 	return (
-		isObject(value) &&
+		typeof value === "object" &&
+		value !== null &&
 		"kind" in value &&
 		value.kind === "compaction" &&
 		"setMessage" in value &&
@@ -36,28 +21,21 @@ function isMutableCompactionIndicator(value: unknown): value is MutableCompactio
 	);
 }
 
-/**
- * Update Pi's mounted compaction loader through the TUI component tree.
- * The traversal is structural so incompatible Pi layouts fail closed.
- */
-export function setCompactionStatusMessage(root: unknown, message: string): boolean {
+export function findCompactionIndicator(root: unknown): CompactionIndicator | undefined {
 	const pending: unknown[] = [root];
-	const visited = new Set<object>();
-	const matches: MutableCompactionIndicator[] = [];
-
 	while (pending.length > 0) {
 		const component = pending.pop();
-		if (!isObject(component) || visited.has(component)) continue;
-		visited.add(component);
-
-		if (isMutableCompactionIndicator(component)) matches.push(component);
-		pending.push(...getChildComponents(component));
+		if (isCompactionIndicator(component)) return component;
+		if (
+			typeof component === "object" &&
+			component !== null &&
+			"children" in component &&
+			Array.isArray(component.children)
+		) {
+			pending.push(...component.children);
+		}
 	}
-
-	const [indicator] = matches;
-	if (matches.length !== 1 || indicator === undefined) return false;
-	indicator.setMessage(message);
-	return true;
+	return undefined;
 }
 
 function compactionLabel(reason: CompactionReason): string {
@@ -71,43 +49,11 @@ function compactionLabel(reason: CompactionReason): string {
 	}
 }
 
-function interruptKey(): string {
-	return keyText("app.interrupt") || "esc";
-}
-
-export function formatCompactionProgressMessage(
+export function formatCompactionMessage(
 	reason: CompactionReason,
-	modelRef: string,
-	thinking: CompactionThinkingLevel,
-	cancelKey = interruptKey(),
+	details?: { modelRef: string; thinking: CompactionThinkingLevel },
+	cancelKey = keyText("app.interrupt"),
 ): string {
-	return `${compactionLabel(reason)} with ${modelRef} (${thinking} thinking)... (${cancelKey} to cancel)`;
-}
-
-export function formatDefaultCompactionMessage(
-	reason: CompactionReason,
-	cancelKey = interruptKey(),
-): string {
-	return `${compactionLabel(reason)}... (${cancelKey} to cancel)`;
-}
-
-export class CompactionStatusBridge {
-	private tuiRoot: unknown;
-
-	capture(ctx: ExtensionContext): void {
-		if (ctx.mode !== "tui" || this.tuiRoot !== undefined) return;
-		ctx.ui.setWidget(TUI_CAPTURE_WIDGET_KEY, (tui) => {
-			this.tuiRoot = tui;
-			return EMPTY_TUI_COMPONENT;
-		});
-		ctx.ui.setWidget(TUI_CAPTURE_WIDGET_KEY, undefined);
-	}
-
-	update(message: string): void {
-		if (this.tuiRoot !== undefined) setCompactionStatusMessage(this.tuiRoot, message);
-	}
-
-	clear(): void {
-		this.tuiRoot = undefined;
-	}
+	const progress = details ? ` with ${details.modelRef} (${details.thinking} thinking)` : "";
+	return `${compactionLabel(reason)}${progress}... (${cancelKey} to cancel)`;
 }

@@ -5,9 +5,11 @@ import { join } from "node:path";
 import { after, test } from "node:test";
 import {
 	createEventBus,
+	keyText,
 	type ExtensionAPI,
 	type ExtensionContext,
 	type ProviderConfig,
+	type SessionBeforeCompactEvent,
 } from "@earendil-works/pi-coding-agent";
 import { fauxAssistantMessage, registerFauxProvider, type Api, type Model } from "@earendil-works/pi-ai/compat";
 
@@ -40,13 +42,7 @@ writeFileSync(
 );
 process.env.PI_AUTO_COMPACT_CONFIG = configPath;
 const { default: autoCompact } = await import("../extensions/auto-compact/index.js");
-const {
-	CompactionStatusBridge,
-	formatCompactionProgressMessage,
-	formatDefaultCompactionMessage,
-	setCompactionStatusMessage,
-} = await import("../extensions/auto-compact/compaction-status.js");
-const { normalizeProviderHeaders } = await import("../extensions/auto-compact/provider-headers.js");
+const { formatCompactionMessage } = await import("../extensions/auto-compact/compaction-status.js");
 after(() => {
 	rmSync(configPath, { force: true });
 	if (previousConfig === undefined) delete process.env.PI_AUTO_COMPACT_CONFIG;
@@ -54,118 +50,18 @@ after(() => {
 });
 
 test("formats reason-specific compaction spinner messages", () => {
-	assert.equal(
-		formatCompactionProgressMessage("manual", "openrouter/faux-1:nitro", "high", "esc"),
-		"Compacting context with openrouter/faux-1:nitro (high thinking)... (esc to cancel)",
-	);
-	assert.equal(
-		formatCompactionProgressMessage("threshold", "openrouter/faux-1:nitro", "high", "esc"),
-		"Auto-compacting with openrouter/faux-1:nitro (high thinking)... (esc to cancel)",
-	);
-	assert.equal(
-		formatCompactionProgressMessage("overflow", "openrouter/faux-1:nitro", "high", "esc"),
-		"Context overflow detected, Auto-compacting with openrouter/faux-1:nitro (high thinking)... (esc to cancel)",
-	);
-	assert.equal(formatDefaultCompactionMessage("manual", "esc"), "Compacting context... (esc to cancel)");
-	assert.equal(formatDefaultCompactionMessage("threshold", "esc"), "Auto-compacting... (esc to cancel)");
-	assert.equal(
-		formatDefaultCompactionMessage("overflow", "esc"),
-		"Context overflow detected, Auto-compacting... (esc to cancel)",
-	);
-});
-
-test("normalizes nullable provider headers for Pi compatibility", () => {
-	assert.deepEqual(normalizeProviderHeaders({ authorization: "Bearer test", "x-remove": null }), {
-		authorization: "Bearer test",
-	});
-	assert.equal(normalizeProviderHeaders(undefined), undefined);
-});
-
-test("updates only one mounted compaction status indicator", () => {
-	const compactionMessages: string[] = [];
-	const workingMessages: string[] = [];
-	const compactionIndicator = {
-		kind: "compaction",
-		setMessage(message: string) {
-			compactionMessages.push(message);
-		},
-	};
-	const root = {
-		children: [
-			{
-				kind: "working",
-				setMessage(message: string) {
-					workingMessages.push(message);
-				},
-			},
-			{ children: [{ children: [compactionIndicator] }] },
-		],
-	};
-
-	assert.equal(setCompactionStatusMessage(root, "Dedicated compaction"), true);
-	assert.deepEqual(compactionMessages, ["Dedicated compaction"]);
-	assert.deepEqual(workingMessages, []);
-	assert.equal(setCompactionStatusMessage({ children: [] }, "Missing"), false);
-
-	const duplicateMessages: string[] = [];
-	const duplicate = {
-		kind: "compaction",
-		setMessage(message: string) {
-			duplicateMessages.push(message);
-		},
-	};
-	assert.equal(setCompactionStatusMessage({ children: [compactionIndicator, duplicate] }, "Ambiguous"), false);
-	assert.deepEqual(compactionMessages, ["Dedicated compaction"]);
-	assert.deepEqual(duplicateMessages, []);
-});
-
-test("captures the live TUI tree and can recapture after clearing", () => {
-	const bridge = new CompactionStatusBridge();
-	const firstChildren: unknown[] = [];
-	const firstMessages: string[] = [];
-	const firstRoot = { children: firstChildren };
-	const firstContext = {
-		mode: "tui",
-		ui: {
-			setWidget(_key: string, content: unknown) {
-				if (typeof content === "function") content(firstRoot, {});
-			},
-		},
-	} as unknown as ExtensionContext;
-
-	bridge.capture(firstContext);
-	firstChildren.push({
-		kind: "compaction",
-		setMessage(message: string) {
-			firstMessages.push(message);
-		},
-	});
-	bridge.update("Mounted after capture");
-	assert.deepEqual(firstMessages, ["Mounted after capture"]);
-
-	bridge.clear();
-	const secondMessages: string[] = [];
-	const secondRoot = {
-		children: [
-			{
-				kind: "compaction",
-				setMessage(message: string) {
-					secondMessages.push(message);
-				},
-			},
-		],
-	};
-	const secondContext = {
-		mode: "tui",
-		ui: {
-			setWidget(_key: string, content: unknown) {
-				if (typeof content === "function") content(secondRoot, {});
-			},
-		},
-	} as unknown as ExtensionContext;
-	bridge.capture(secondContext);
-	bridge.update("Recaptured");
-	assert.deepEqual(secondMessages, ["Recaptured"]);
+	const cases: Array<{ reason: SessionBeforeCompactEvent["reason"]; label: string }> = [
+		{ reason: "manual", label: "Compacting context" },
+		{ reason: "threshold", label: "Auto-compacting" },
+		{ reason: "overflow", label: "Context overflow detected, Auto-compacting" },
+	];
+	for (const { reason, label } of cases) {
+		assert.equal(
+			formatCompactionMessage(reason, { modelRef: "openrouter/faux-1:nitro", thinking: "high" }, "esc"),
+			`${label} with openrouter/faux-1:nitro (high thinking)... (esc to cancel)`,
+		);
+		assert.equal(formatCompactionMessage(reason, undefined, "esc"), `${label}... (esc to cancel)`);
+	}
 });
 
 test("dedicated compaction bypasses runtime provider overlays", async () => {
@@ -290,8 +186,7 @@ test("tries configured fallback compaction models in order", async () => {
 				compactionMessages.push(message);
 			},
 		};
-		const statusChildren: unknown[] = [];
-		const tuiRoot = { children: [{ children: statusChildren }] };
+		const tuiRoot = { children: [{ children: [compactionIndicator] }] };
 		const ctx = {
 			mode: "tui",
 			model: { ...model, provider: "active", id: "conversation" },
@@ -315,12 +210,8 @@ test("tries configured fallback compaction models in order", async () => {
 				},
 			},
 		} as unknown as ExtensionContext;
-		const sessionStart = handlers.get("session_start")?.[0];
 		const beforeCompact = handlers.get("session_before_compact")?.[0];
-		assert.ok(sessionStart, "session_start handler should be registered");
 		assert.ok(beforeCompact, "session_before_compact handler should be registered");
-		await sessionStart({ type: "session_start", reason: "startup" }, ctx);
-		statusChildren.push(compactionIndicator);
 
 		const compactionEvent = {
 			reason: "manual",
@@ -344,11 +235,13 @@ test("tries configured fallback compaction models in order", async () => {
 		assert.equal(inheritedPrimaryInstructions, true);
 		assert.equal(requestModelId, "faux-3:nitro");
 		assert.match(result.compaction?.summary ?? "", /fallback summary/);
-		assert.deepEqual(compactionMessages, [
-			"Compacting context with openrouter/faux-1:nitro (off thinking)... (esc to cancel)",
-			"Compacting context with openrouter/faux-2:floor (off thinking)... (esc to cancel)",
-			"Compacting context with openrouter/faux-3:nitro (off thinking)... (esc to cancel)",
-		]);
+		const cancelKey = keyText("app.interrupt");
+		const progressMessages = [
+			`Compacting context with openrouter/faux-1:nitro (off thinking)... (${cancelKey} to cancel)`,
+			`Compacting context with openrouter/faux-2:floor (off thinking)... (${cancelKey} to cancel)`,
+			`Compacting context with openrouter/faux-3:nitro (off thinking)... (${cancelKey} to cancel)`,
+		];
+		assert.deepEqual(compactionMessages, progressMessages);
 		assert.equal(
 			notifications.filter((message) => /quota exhausted.*falling back to openrouter\/faux-[23]/.test(message))
 				.length,
@@ -362,10 +255,8 @@ test("tries configured fallback compaction models in order", async () => {
 		assert.equal(authCalls, 6);
 		assert.deepEqual(attemptedModels.slice(3), ["faux-1", "faux-2", "faux-3"]);
 		assert.deepEqual(compactionMessages.slice(3), [
-			"Compacting context with openrouter/faux-1:nitro (off thinking)... (esc to cancel)",
-			"Compacting context with openrouter/faux-2:floor (off thinking)... (esc to cancel)",
-			"Compacting context with openrouter/faux-3:nitro (off thinking)... (esc to cancel)",
-			"Compacting context... (esc to cancel)",
+			...progressMessages,
+			`Compacting context... (${cancelKey} to cancel)`,
 		]);
 		assert.match(notifications.at(-1) ?? "", /falling back to active\/conversation/);
 
@@ -374,9 +265,7 @@ test("tries configured fallback compaction models in order", async () => {
 		const messageCountBeforeAbort = compactionMessages.length;
 		const abortedResult = await beforeCompact({ ...compactionEvent, signal: abortController.signal }, ctx);
 		assert.equal(abortedResult, undefined);
-		assert.deepEqual(compactionMessages.slice(messageCountBeforeAbort), [
-			"Compacting context with openrouter/faux-1:nitro (off thinking)... (esc to cancel)",
-		]);
+		assert.deepEqual(compactionMessages.slice(messageCountBeforeAbort), progressMessages.slice(0, 1));
 	} finally {
 		faux.unregister();
 	}

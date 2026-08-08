@@ -2,8 +2,7 @@
 
 ## Unreleased
 
-- Show dedicated model and thinking progress in Pi's existing compaction spinner instead of a separate notification.
-- Preserve Pi's reason-specific manual, threshold and overflow compaction labels.
+- Show dedicated model and thinking progress in Pi's existing compaction spinner, preserving reason-specific labels.
 - Normalize nullable provider headers for compatibility with current Pi releases.
 
 ## v0.1.8
