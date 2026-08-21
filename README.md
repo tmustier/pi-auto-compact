@@ -87,11 +87,22 @@ Set `PI_AUTO_COMPACT_CONFIG` to use another config path. Set `PI_CODING_AGENT_DI
 
 `compactionModel` supports:
 
-- `provider` and `model`, both required
+- `model`: required
+- `provider`: optional; when omitted, inherits the active Pi session model's provider at compaction time
 - `thinking`: `off`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`
 - `instructions`: extra instructions appended to `/compact` instructions
 
-`fallbackCompactionModels` is an optional ordered array with the same fields and requires `compactionModel`. If the primary model fails, the extension tries each fallback in order. A fallback without `instructions` inherits the primary model's instructions. If every configured model fails, Pi uses the active conversation model.
+For example, this uses `gpt-5.3-codex-spark` from whichever provider the current Pi session model uses:
+
+```json
+{
+  "compactionModel": {
+    "model": "gpt-5.3-codex-spark"
+  }
+}
+```
+
+`fallbackCompactionModels` is an optional ordered array with the same fields and requires `compactionModel`. An omitted fallback `provider` also inherits the active session provider. If the primary model fails, the extension tries each fallback in order. A fallback without `instructions` inherits the primary model's instructions. If every configured model fails, Pi uses the active conversation model.
 
 Interactive dedicated-model compactions show the model and thinking level in Pi's existing spinner while preserving its manual, threshold and overflow labels.
 

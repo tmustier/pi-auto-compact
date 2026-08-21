@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Allow dedicated compaction models to omit `provider` and inherit the active Pi session model's provider.
+
 ## v0.1.9
 
 - Show dedicated model and thinking progress in Pi's existing compaction spinner, preserving reason-specific labels.
