@@ -16,7 +16,7 @@ export type ModelIdentity = {
 export type CompactionThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 export type CompactionModelOverride = {
-	provider: string;
+	provider?: string;
 	model: string;
 	thinking: CompactionThinkingLevel;
 	instructions?: string;
@@ -142,7 +142,7 @@ function parseCompactionModel(value: unknown, path: string): CompactionModelOver
 		throw new Error(`${path}.thinking must be one of off, minimal, low, medium, high, xhigh, or max`);
 	}
 	return {
-		provider: parseRequiredString(value.provider, `${path}.provider`),
+		provider: parseOptionalString(value.provider, `${path}.provider`),
 		model: parseRequiredString(value.model, `${path}.model`),
 		thinking: thinking as CompactionThinkingLevel,
 		instructions: parseOptionalString(value.instructions, `${path}.instructions`),

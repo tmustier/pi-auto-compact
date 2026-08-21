@@ -14,6 +14,7 @@ import {
 	loadPolicy,
 	resolveConfiguredThreshold,
 	resolveThreshold,
+	type CompactionModelOverride,
 	type ModelIdentity,
 } from "./config.js";
 import { loadNativeCompactionThreshold } from "./native-threshold.js";
@@ -96,6 +97,10 @@ function syntheticOverflow(model: Model<Api>, tokens: number, threshold: number,
 
 function modelIdentity(model: Model<Api>): ModelIdentity {
 	return { api: model.api, provider: model.provider, id: model.id };
+}
+
+function compactionModelRef(override: CompactionModelOverride, inheritedProvider?: string): string {
+	return `${override.provider ?? inheritedProvider ?? "<active provider>"}/${override.model}`;
 }
 
 export default function autoCompact(pi: ExtensionAPI) {
@@ -205,12 +210,12 @@ export default function autoCompact(pi: ExtensionAPI) {
 		const currentWrapperActive =
 			ctx.model !== undefined && installedProviders.get(ctx.model.provider) === ctx.model.api;
 		const compactionModelText = policy.compactionModel
-			? `${policy.compactionModel.provider}/${policy.compactionModel.model} (${policy.compactionModel.thinking} thinking)`
+			? `${compactionModelRef(policy.compactionModel, ctx.model?.provider)} (${policy.compactionModel.thinking} thinking)`
 			: "active model";
 		const fallbackCompactionModelText =
 			fallbackCompactionModels.length > 0
 				? fallbackCompactionModels
-						.map((model) => `${model.provider}/${model.model} (${model.thinking} thinking)`)
+						.map((model) => `${compactionModelRef(model, ctx.model?.provider)} (${model.thinking} thinking)`)
 						.join(" → ")
 				: "active model";
 
@@ -242,9 +247,9 @@ export default function autoCompact(pi: ExtensionAPI) {
 		activeContext = ctx;
 		if (policy.error) ctx.ui.notify(policy.error, "error");
 		if (policy.compactionModel) {
-			const overrideRef = `${policy.compactionModel.provider}/${policy.compactionModel.model}`;
+			const overrideRef = compactionModelRef(policy.compactionModel, ctx.model?.provider);
 			const fallbackRef = fallbackCompactionModels
-				.map((model) => `${model.provider}/${model.model}`)
+				.map((model) => compactionModelRef(model, ctx.model?.provider))
 				.join(", then ");
 			ctx.ui.notify(
 				`auto-compact: dedicated compaction model ${overrideRef}${fallbackRef ? `, then ${fallbackRef}` : ""} is enabled; disable other compaction extensions because Pi runs every compaction handler`,
@@ -269,15 +274,17 @@ export default function autoCompact(pi: ExtensionAPI) {
 		const overrides = [primary, ...fallbackCompactionModels];
 		const activeRef = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "the active model";
 		for (const [index, override] of overrides.entries()) {
-			const overrideRef = `${override.provider}/${override.model}`;
+			const providerName = override.provider ?? ctx.model?.provider;
+			const overrideRef = compactionModelRef(override, ctx.model?.provider);
 			compactionIndicator?.setMessage(
 				formatCompactionMessage(event.reason, { modelRef: overrideRef, thinking: override.thinking }),
 			);
 			try {
-				let model = ctx.modelRegistry.find(override.provider, override.model);
-				if (!model && override.provider === "openrouter") {
+				if (!providerName) throw new Error("no active model provider is available");
+				let model = ctx.modelRegistry.find(providerName, override.model);
+				if (!model && providerName === "openrouter") {
 					const baseModelId = override.model.replace(/:(?:nitro|floor)$/, "");
-					if (baseModelId !== override.model) model = ctx.modelRegistry.find(override.provider, baseModelId);
+					if (baseModelId !== override.model) model = ctx.modelRegistry.find(providerName, baseModelId);
 				}
 				if (!model) throw new Error("model is not available");
 
@@ -289,8 +296,8 @@ export default function autoCompact(pi: ExtensionAPI) {
 					...(providerAuth?.auth.baseUrl ? { baseUrl: providerAuth.auth.baseUrl } : {}),
 					...(model.id !== override.model ? { id: override.model } : {}),
 				};
-				const provider = getApiProvider(model.api);
-				if (!provider) throw new Error("API provider is not available");
+				const apiProvider = getApiProvider(model.api);
+				if (!apiProvider) throw new Error("API provider is not available");
 
 				const customInstructions = [override.instructions ?? primary.instructions, event.customInstructions]
 					.filter(Boolean)
@@ -310,7 +317,7 @@ export default function autoCompact(pi: ExtensionAPI) {
 					customInstructions || undefined,
 					event.signal,
 					override.thinking,
-					provider.streamSimple.bind(provider),
+					apiProvider.streamSimple.bind(apiProvider),
 					auth.env,
 				);
 				return { compaction: result };
@@ -318,7 +325,7 @@ export default function autoCompact(pi: ExtensionAPI) {
 				if (event.signal.aborted) return;
 				const message = error instanceof Error ? error.message : String(error);
 				const next = overrides[index + 1];
-				const nextRef = next ? `${next.provider}/${next.model}` : activeRef;
+				const nextRef = next ? compactionModelRef(next, ctx.model?.provider) : activeRef;
 				ctx.ui.notify(
 					`auto-compact: ${overrideRef} compaction failed (${message}); falling back to ${nextRef}`,
 					"warning",

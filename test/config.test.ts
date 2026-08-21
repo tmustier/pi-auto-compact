@@ -198,9 +198,10 @@ test("parses ordered fallback compaction models", () => {
 
 test("defaults configured compaction model thinking to medium", () => {
 	const policy = parsePolicy({
-		compactionModel: { provider: "openai-codex", model: "gpt-5.3-codex-spark" },
+		compactionModel: { model: "gpt-5.3-codex-spark" },
 	});
 	assert.equal(policy.compactionModel?.thinking, "medium");
+	assert.equal(policy.compactionModel?.provider, undefined);
 });
 
 test("uses Pi's native threshold when no configured default exists", () => {
@@ -227,7 +228,7 @@ test("rejects malformed configuration", () => {
 	assert.throws(() => parsePolicy({ rules: [{ thresholdTokens: 1, modelPattern: "[" }] }), /valid regular expression/);
 	assert.throws(() => parsePolicy({ rules: [{ thresholdTokens: 1, version: { gte: "5" } }] }), /major\.minor/);
 	assert.throws(() => parsePolicy({ rules: [{ thresholdTokens: -1 }] }), /non-negative integer/);
-	assert.throws(() => parsePolicy({ compactionModel: { model: "spark" } }), /provider is required/);
+	assert.throws(() => parsePolicy({ compactionModel: { provider: "openai-codex" } }), /model is required/);
 	assert.throws(
 		() => parsePolicy({ compactionModel: { provider: "openai-codex", model: "spark", thinking: "extreme" } }),
 		/compactionModel\.thinking/,

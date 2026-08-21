@@ -21,7 +21,6 @@ writeFileSync(
 	configPath,
 	JSON.stringify({
 		compactionModel: {
-			provider: "openrouter",
 			model: "faux-1:nitro",
 			thinking: "off",
 			instructions: "Preserve primary instructions.",
@@ -64,7 +63,7 @@ test("formats reason-specific compaction spinner messages", () => {
 	}
 });
 
-test("dedicated compaction bypasses runtime provider overlays", async () => {
+test("dedicated compaction inherits the active provider and bypasses runtime provider overlays", async () => {
 	const faux = registerFauxProvider({
 		provider: "openrouter",
 		models: [{ id: "faux-1" }, { id: "faux-2" }, { id: "faux-3" }],
@@ -91,14 +90,17 @@ test("dedicated compaction bypasses runtime provider overlays", async () => {
 		autoCompact(pi);
 
 		let runtimeProviderReads = 0;
+		let inheritedProvider: string | undefined;
 		const notifications: string[] = [];
 		const model = faux.getModel();
 		const ctx = {
 			mode: "rpc",
 			model,
 			modelRegistry: {
-				find: (provider: string, id: string) =>
-					provider === model.provider && id === model.id ? model : undefined,
+				find: (provider: string, id: string) => {
+					inheritedProvider = provider;
+					return provider === model.provider && id === model.id ? model : undefined;
+				},
 				getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-key", headers: {} }),
 				getProviderAuth: async () => undefined,
 				getProvider: () => {
@@ -137,6 +139,7 @@ test("dedicated compaction bypasses runtime provider overlays", async () => {
 
 		assert.ok(result, notifications.join("\n"));
 		assert.equal(runtimeProviderReads, 0);
+		assert.equal(inheritedProvider, "openrouter");
 		assert.match(result.compaction?.summary ?? "", /dedicated summary/);
 		assert.equal(faux.state.callCount, 1);
 		assert.equal(requestModelId, "faux-1:nitro");
@@ -189,7 +192,7 @@ test("tries configured fallback compaction models in order", async () => {
 		const tuiRoot = { children: [{ children: [compactionIndicator] }] };
 		const ctx = {
 			mode: "tui",
-			model: { ...model, provider: "active", id: "conversation" },
+			model: { ...model, id: "conversation" },
 			modelRegistry: {
 				find: (provider: string, id: string) => provider === model.provider ? faux.getModel(id) : undefined,
 				getApiKeyAndHeaders: async (requestedModel: Model<Api>) => {
@@ -258,7 +261,7 @@ test("tries configured fallback compaction models in order", async () => {
 			...progressMessages,
 			`Compacting context... (${cancelKey} to cancel)`,
 		]);
-		assert.match(notifications.at(-1) ?? "", /falling back to active\/conversation/);
+		assert.match(notifications.at(-1) ?? "", /falling back to openrouter\/conversation/);
 
 		const abortController = new AbortController();
 		abortOnNextAuth = abortController;
