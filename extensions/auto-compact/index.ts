@@ -6,6 +6,7 @@ import {
 	type AssistantMessage,
 	type Context,
 	type Model,
+	type Provider,
 } from "@earendil-works/pi-ai/compat";
 import { findCompactionIndicator, formatCompactionMessage } from "./compaction-status.js";
 import {
@@ -37,7 +38,25 @@ const ZERO_USAGE = {
 	},
 };
 
-type RuntimeProviderStream = NonNullable<Parameters<ExtensionAPI["registerProvider"]>[1]["streamSimple"]>;
+const PROVIDER_WRAPPER = Symbol.for("pi-auto-compact:provider-wrapper:v1");
+
+type ProviderRegistration =
+	| { type: "native"; provider: Provider }
+	| { type: "named"; config: NonNullable<ReturnType<ExtensionContext["modelRegistry"]["getRegisteredProviderConfig"]>> }
+	| { type: "inherited" };
+
+type ProviderWrapperMetadata = {
+	upstream: Provider;
+	registration: ProviderRegistration;
+};
+
+type WrappedProvider = Provider & {
+	[PROVIDER_WRAPPER]?: ProviderWrapperMetadata;
+};
+
+type InstalledProvider = ProviderWrapperMetadata & {
+	wrapper: Provider;
+};
 
 type ArmedRequest = {
 	api: Api;
@@ -98,6 +117,43 @@ function modelIdentity(model: Model<Api>): ModelIdentity {
 	return { api: model.api, provider: model.provider, id: model.id };
 }
 
+function providerWrapperMetadata(provider: Provider): ProviderWrapperMetadata | undefined {
+	return (provider as WrappedProvider)[PROVIDER_WRAPPER];
+}
+
+function providerWrapperIsActive(ctx: ExtensionContext, providerId: string, wrapper: Provider): boolean {
+	return (
+		ctx.modelRegistry.getProvider(providerId) === wrapper ||
+		ctx.modelRegistry.getRegisteredNativeProvider(providerId) === wrapper
+	);
+}
+
+function createProviderWrapper(
+	upstream: Provider,
+	registration: ProviderRegistration,
+	intercept: (model: Model<Api>, context: Context) => ReturnType<Provider["streamSimple"]> | undefined,
+): Provider {
+	const wrapper: Provider = {
+		id: upstream.id,
+		name: upstream.name,
+		...(upstream.baseUrl === undefined ? {} : { baseUrl: upstream.baseUrl }),
+		...(upstream.headers === undefined ? {} : { headers: upstream.headers }),
+		auth: upstream.auth,
+		getModels: upstream.getModels.bind(upstream),
+		...(upstream.refreshModels ? { refreshModels: upstream.refreshModels.bind(upstream) } : {}),
+		...(upstream.filterModels ? { filterModels: upstream.filterModels.bind(upstream) } : {}),
+		stream: upstream.stream.bind(upstream) as Provider["stream"],
+		streamSimple: (model, context, options) =>
+			intercept(model, context) ?? upstream.streamSimple(model, context, options),
+		...(upstream.fetchDeferred ? { fetchDeferred: upstream.fetchDeferred.bind(upstream) } : {}),
+		...(upstream.cancelDeferred ? { cancelDeferred: upstream.cancelDeferred.bind(upstream) } : {}),
+	};
+	Object.defineProperty(wrapper, PROVIDER_WRAPPER, {
+		value: { upstream, registration } satisfies ProviderWrapperMetadata,
+	});
+	return wrapper;
+}
+
 export default function autoCompact(pi: ExtensionAPI) {
 	const policy = loadPolicy();
 	const fallbackCompactionModels = policy.fallbackCompactionModels ?? [];
@@ -114,7 +170,7 @@ export default function autoCompact(pi: ExtensionAPI) {
 	let armedRequestMismatchCount = 0;
 	let lastToolTurn = "none";
 	let activeContext: ExtensionContext | undefined;
-	const installedProviders = new Map<string, Api>();
+	const installedProviders = new Map<string, InstalledProvider>();
 
 	function resolveRuntimeThreshold(ctx: ExtensionContext, model: Model<Api>) {
 		const native = loadNativeCompactionThreshold(ctx, model.contextWindow);
@@ -153,28 +209,40 @@ export default function autoCompact(pi: ExtensionAPI) {
 		armed = undefined;
 		interceptionCount += 1;
 		syntheticAwaitingCompaction = true;
+		if (activeContext) restoreProviderWrapper(request.provider, activeContext);
 		return syntheticOverflow(model, request.tokens, request.threshold, policy.configPath);
 	}
 
-	function installProviderWrapper(model: Model<Api>): boolean {
-		const installedApi = installedProviders.get(model.provider);
-		if (installedApi === model.api) return true;
-
-		const upstream = getApiProvider(model.api);
-		if (!upstream) {
-			lastInstallError = `No registered API provider for: ${model.api}`;
+	function installProviderWrapper(model: Model<Api>, ctx: ExtensionContext): boolean {
+		const current = ctx.modelRegistry.getProvider(model.provider);
+		const installed = installedProviders.get(model.provider);
+		if (installed && providerWrapperIsActive(ctx, model.provider, installed.wrapper)) return true;
+		if (!current) {
+			lastInstallError = `No registered runtime provider for: ${model.provider}`;
 			return false;
 		}
 
-		const streamSimple: RuntimeProviderStream = (requestModel, context, options) =>
-			maybeIntercept(requestModel, context) ?? upstream.streamSimple(requestModel, context, options);
+		// Replacing a stale wrapper from an earlier extension instance must not
+		// create a delegation chain back into invalidated session state.
+		const previousWrapper = providerWrapperMetadata(current);
+		const upstream = previousWrapper?.upstream ?? current;
+		const registration =
+			previousWrapper?.registration ??
+			((): ProviderRegistration => {
+				const native = ctx.modelRegistry.getRegisteredNativeProvider(model.provider);
+				if (native) return { type: "native", provider: native };
+				const named = ctx.modelRegistry.getRegisteredProviderConfig(model.provider);
+				if (named) return { type: "named", config: named };
+				return { type: "inherited" };
+			})();
+		const wrapper = createProviderWrapper(upstream, registration, maybeIntercept);
 
 		try {
 			// Pi 0.80.8 routes requests through ModelRuntime instead of the compat
-			// API registry. A provider-level stream overlay reaches that live path
-			// while preserving the built-in provider's models and authentication.
-			pi.registerProvider(model.provider, { api: model.api, streamSimple });
-			installedProviders.set(model.provider, model.api);
+			// API registry. Registering a complete native provider reaches that live
+			// path without replacing custom provider auth/models with a named overlay.
+			pi.registerProvider(wrapper);
+			installedProviders.set(model.provider, { wrapper, upstream, registration });
 			installCount += 1;
 			lastInstallError = undefined;
 			return true;
@@ -182,6 +250,33 @@ export default function autoCompact(pi: ExtensionAPI) {
 			lastInstallError = error instanceof Error ? error.message : String(error);
 			return false;
 		}
+	}
+
+	function restoreProviderWrapper(providerId: string, ctx: ExtensionContext): boolean {
+		const installed = installedProviders.get(providerId);
+		if (!installed || !providerWrapperIsActive(ctx, providerId, installed.wrapper)) return false;
+		try {
+			switch (installed.registration.type) {
+				case "native":
+					pi.registerProvider(installed.registration.provider);
+					break;
+				case "named":
+					pi.registerProvider(providerId, installed.registration.config);
+					break;
+				case "inherited":
+					pi.unregisterProvider(providerId);
+					break;
+			}
+		} catch {
+			return false;
+		}
+		installedProviders.delete(providerId);
+		return true;
+	}
+
+	function restoreProviderWrappers(ctx: ExtensionContext): void {
+		for (const providerId of installedProviders.keys()) restoreProviderWrapper(providerId, ctx);
+		installedProviders.clear();
 	}
 
 	function clearArmedState(): void {
@@ -202,8 +297,11 @@ export default function autoCompact(pi: ExtensionAPI) {
 		const lastCompactionText = lastCompactionAt
 			? `${lastCompactionTokens?.toLocaleString() ?? "unknown"} tokens at ${new Date(lastCompactionAt).toISOString()}`
 			: "none";
+		const currentInstallation = ctx.model ? installedProviders.get(ctx.model.provider) : undefined;
 		const currentWrapperActive =
-			ctx.model !== undefined && installedProviders.get(ctx.model.provider) === ctx.model.api;
+			ctx.model !== undefined &&
+			currentInstallation !== undefined &&
+			providerWrapperIsActive(ctx, ctx.model.provider, currentInstallation.wrapper);
 		const compactionModelText = policy.compactionModel
 			? `${policy.compactionModel.provider}/${policy.compactionModel.model} (${policy.compactionModel.thinking} thinking)`
 			: "active model";
@@ -327,9 +425,12 @@ export default function autoCompact(pi: ExtensionAPI) {
 		}
 		compactionIndicator?.setMessage(formatCompactionMessage(event.reason));
 	});
-	pi.on("session_shutdown", () => {
-		activeContext = undefined;
+	pi.on("session_shutdown", (_event, ctx) => {
+		clearArmedState();
+		syntheticAwaitingCompaction = false;
+		restoreProviderWrappers(ctx);
 		unregisterPolicyEvents();
+		activeContext = undefined;
 	});
 
 	pi.on("turn_end", (event, ctx) => {
@@ -362,7 +463,7 @@ export default function autoCompact(pi: ExtensionAPI) {
 
 		// Install immediately before arming so the next active ModelRuntime request
 		// cannot bypass the one-shot synthetic overflow.
-		if (!installProviderWrapper(model)) {
+		if (!installProviderWrapper(model, ctx)) {
 			lastToolTurn = `${modelRef}; threshold exceeded but provider wrapper installation failed`;
 			ctx.ui.notify(`auto-compact: ${lastInstallError ?? "provider wrapper installation failed"}`, "error");
 			return;

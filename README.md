@@ -117,6 +117,8 @@ PI_AUTO_COMPACT_TEST_THRESHOLD=1 pi
 
 Requires Pi 0.82.1 or newer.
 
+Auto-compact wraps the live Pi runtime provider as a complete native provider. This preserves custom providers' authentication, model catalogs, filtering, refresh and stream behavior, including OAuth provider clones. The one-shot wrapper is removed as soon as it triggers, or on session shutdown/reload when auto-compact still owns it.
+
 Pi allows one extension stream override per provider. Another extension can replace auto-compact's override, or auto-compact can replace one loaded earlier.
 
 Other extensions can request the active threshold by emitting `pi-auto-compact:policy-request:v1`. Auto-compact responds on `pi-auto-compact:policy:v1` with the model, threshold, policy source and config path.
