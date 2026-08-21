@@ -6,12 +6,22 @@ import { after, test } from "node:test";
 import {
 	createEventBus,
 	keyText,
+	ModelRegistry,
+	ModelRuntime,
 	type ExtensionAPI,
 	type ExtensionContext,
 	type ProviderConfig,
 	type SessionBeforeCompactEvent,
 } from "@earendil-works/pi-coding-agent";
-import { fauxAssistantMessage, registerFauxProvider, type Api, type Model } from "@earendil-works/pi-ai/compat";
+import {
+	fauxAssistantMessage,
+	fauxProvider,
+	InMemoryCredentialStore,
+	registerFauxProvider,
+	type Api,
+	type Model,
+	type Provider,
+} from "@earendil-works/pi-ai/compat";
 
 type EventHandler = (event: unknown, ctx: ExtensionContext) => unknown;
 
@@ -271,13 +281,75 @@ test("tries configured fallback compaction models in order", async () => {
 	}
 });
 
-test("intercepts the next ModelRuntime provider request after a tool turn crosses the threshold", async () => {
+test("preserves a native OAuth provider while intercepting ModelRuntime requests", async () => {
 	const previousThreshold = process.env.PI_AUTO_COMPACT_TEST_THRESHOLD;
 	process.env.PI_AUTO_COMPACT_TEST_THRESHOLD = "1";
 
 	try {
+		const credentials = new InMemoryCredentialStore();
+		const oauthCredential = {
+			type: "oauth" as const,
+			refresh: "refresh-token",
+			access: "access-token",
+			expires: Date.now() + 60 * 60 * 1_000,
+		};
+		await credentials.modify("xiangliang", async () => oauthCredential);
+		const runtime = await ModelRuntime.create({ credentials, modelsPath: null, refreshOnCreate: false });
+		const faux = fauxProvider({
+			api: "openai-codex-responses",
+			provider: "xiangliang",
+			models: [{ id: "gpt-5.6-sol", contextWindow: 400_000 }],
+		});
+		faux.setResponses([fauxAssistantMessage("delegated request"), fauxAssistantMessage("stream request")]);
+		let getModelsReceiver: unknown;
+		let filterModelsReceiver: unknown;
+		let simpleStreamReceiver: unknown;
+		let streamReceiver: unknown;
+		let delegatedApiKey: string | undefined;
+		let oauthResolutionCount = 0;
+		const upstream: Provider = {
+			...faux.provider,
+			auth: {
+				oauth: {
+					name: "Cloned Codex OAuth",
+					isSubscription: true,
+					async login() {
+						return oauthCredential;
+					},
+					async refresh(credential) {
+						return credential;
+					},
+					async toAuth(credential) {
+						oauthResolutionCount += 1;
+						return { apiKey: credential.access, baseUrl: "https://clone.example.test/codex" };
+					},
+				},
+			},
+			getModels() {
+				getModelsReceiver = this;
+				return faux.provider.getModels();
+			},
+			filterModels(models) {
+				filterModelsReceiver = this;
+				return models;
+			},
+			stream(model, context, options) {
+				streamReceiver = this;
+				return faux.provider.stream(model, context, options);
+			},
+			streamSimple(model, context, options) {
+				simpleStreamReceiver = this;
+				delegatedApiKey = options?.apiKey;
+				return faux.provider.streamSimple(model, context, options);
+			},
+		};
+		runtime.registerNativeProvider(upstream);
+		const modelRegistry = new ModelRegistry(runtime);
+		const model = modelRegistry.find("xiangliang", "gpt-5.6-sol");
+		assert.ok(model);
+
 		const handlers = new Map<string, EventHandler[]>();
-		const providerRegistrations: Array<{ name: string; config: ProviderConfig }> = [];
+		let providerRegistrationCount = 0;
 		const pi = {
 			events: createEventBus(),
 			on(event: string, handler: EventHandler) {
@@ -286,28 +358,26 @@ test("intercepts the next ModelRuntime provider request after a tool turn crosse
 				handlers.set(event, registered);
 			},
 			registerCommand() {},
-			registerProvider(name: string, config: ProviderConfig) {
-				providerRegistrations.push({ name, config });
+			registerProvider(providerOrName: Provider | string, config?: ProviderConfig) {
+				providerRegistrationCount += 1;
+				if (typeof providerOrName === "string") {
+					assert.ok(config);
+					runtime.registerProvider(providerOrName, config);
+				} else {
+					runtime.registerNativeProvider(providerOrName);
+				}
+			},
+			unregisterProvider(name: string) {
+				runtime.unregisterProvider(name);
 			},
 		} as unknown as ExtensionAPI;
 
 		autoCompact(pi);
 
-		const model = {
-			id: "gpt-5.6-sol",
-			name: "GPT-5.6 Sol",
-			api: "openai-codex-responses",
-			provider: "openai-codex",
-			baseUrl: "https://chatgpt.com/backend-api/codex",
-			reasoning: true,
-			input: ["text"],
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-			contextWindow: 400_000,
-			maxTokens: 128_000,
-		} as Model<Api>;
 		const ctx = {
 			cwd: tmpdir(),
 			model,
+			modelRegistry,
 			isProjectTrusted: () => false,
 			getContextUsage: () => ({ tokens: 10, contextWindow: model.contextWindow, percent: 0 }),
 			ui: { notify() {} },
@@ -324,12 +394,36 @@ test("intercepts the next ModelRuntime provider request after a tool turn crosse
 			ctx,
 		);
 
-		assert.equal(providerRegistrations.length, 1);
-		assert.equal(providerRegistrations[0]?.name, model.provider);
-		const streamSimple = providerRegistrations[0]?.config.streamSimple;
-		assert.ok(streamSimple, "ModelRuntime provider overlay should supply streamSimple");
+		assert.equal(providerRegistrationCount, 1);
+		const wrapper = modelRegistry.getProvider("xiangliang");
+		assert.ok(wrapper);
+		assert.notEqual(wrapper, upstream);
+		assert.equal(runtime.getRegisteredNativeProvider("xiangliang"), wrapper);
+		assert.equal(runtime.getRegisteredProviderConfig("xiangliang"), undefined);
+		assert.equal(wrapper.auth, upstream.auth);
+		assert.deepEqual(wrapper.getModels(), upstream.getModels());
+		assert.equal(getModelsReceiver, upstream, "getModels should keep its upstream this binding");
+		assert.deepEqual(wrapper.filterModels?.(wrapper.getModels(), oauthCredential), wrapper.getModels());
+		assert.equal(filterModelsReceiver, upstream, "filterModels should keep its upstream this binding");
+		assert.equal(typeof wrapper.stream, "function");
+		assert.equal(typeof wrapper.streamSimple, "function");
+		await turnEnd(
+			{
+				type: "turn_end",
+				message: { role: "assistant", content: [], timestamp: Date.now() },
+				toolResults: [{ toolCallId: "tool-1" }],
+			},
+			ctx,
+		);
+		assert.equal(providerRegistrationCount, 1, "re-arming must reuse the still-active wrapper by object identity");
 
-		const stream = streamSimple(
+		await runtime.refresh({ allowNetwork: false });
+		const auth = await runtime.getAuth(model);
+		assert.equal(auth?.auth.apiKey, "access-token");
+		assert.equal(auth?.auth.baseUrl, "https://clone.example.test/codex");
+		assert.equal(runtime.isUsingOAuth("xiangliang"), true);
+
+		const stream = runtime.streamSimple(
 			model,
 			{
 				systemPrompt: "",
@@ -353,6 +447,279 @@ test("intercepts the next ModelRuntime provider request after a tool turn crosse
 		assert.match(result.errorMessage ?? "", /auto-compaction token limit exceeded/);
 		assert.equal(result.provider, model.provider);
 		assert.equal(result.model, model.id);
+		assert.equal(simpleStreamReceiver, undefined, "an intercepted request should not reach the upstream provider");
+		assert.equal(modelRegistry.getProvider("xiangliang"), upstream, "the one-shot wrapper should restore immediately");
+		assert.equal(runtime.getRegisteredNativeProvider("xiangliang"), upstream);
+		assert.equal(providerRegistrationCount, 2);
+
+		const delegated = await runtime
+			.streamSimple(model, { systemPrompt: "", messages: [], tools: [] }, {})
+			.result();
+		assert.equal(delegated.stopReason, "stop");
+		assert.equal(delegated.provider, model.provider);
+		assert.equal(simpleStreamReceiver, upstream, "ordinary shared-runtime requests should delegate to the live provider");
+		assert.equal(delegatedApiKey, "access-token");
+
+		await runtime.stream(model, { systemPrompt: "", messages: [], tools: [] }, {}).result();
+		assert.equal(streamReceiver, upstream, "the provider's full stream API should remain bound to the upstream provider");
+		assert.ok(oauthResolutionCount >= 4);
+
+		let replacementDelegations = 0;
+		const replacement: Provider = {
+			...upstream,
+			name: "Replacement OAuth clone",
+			streamSimple(requestModel, context, options) {
+				replacementDelegations += 1;
+				return upstream.streamSimple(requestModel, context, options);
+			},
+		};
+		runtime.registerNativeProvider(replacement);
+		await turnEnd(
+			{
+				type: "turn_end",
+				message: { role: "assistant", content: [], timestamp: Date.now() },
+				toolResults: [{ toolCallId: "tool-3" }],
+			},
+			ctx,
+		);
+		const replacementWrapper = modelRegistry.getProvider("xiangliang");
+		assert.ok(replacementWrapper);
+		assert.notEqual(replacementWrapper, replacement);
+		assert.notEqual(replacementWrapper, wrapper);
+		assert.equal(providerRegistrationCount, 3, "a replaced wrapper should be recaptured from the live runtime");
+		await replacementWrapper.streamSimple(model, { systemPrompt: "", messages: [], tools: [] }, {}).result();
+		assert.equal(replacementDelegations, 1);
+
+		const shutdown = handlers.get("session_shutdown")?.[0];
+		assert.ok(shutdown, "session_shutdown handler should be registered");
+		await shutdown({ type: "session_shutdown", reason: "reload" }, ctx);
+		assert.equal(modelRegistry.getProvider("xiangliang"), replacement);
+		assert.equal(runtime.getRegisteredNativeProvider("xiangliang"), replacement);
+		assert.equal(providerRegistrationCount, 4);
+	} finally {
+		if (previousThreshold === undefined) delete process.env.PI_AUTO_COMPACT_TEST_THRESHOLD;
+		else process.env.PI_AUTO_COMPACT_TEST_THRESHOLD = previousThreshold;
+	}
+});
+
+test("a replacement extension instance unwraps the previous auto-compact wrapper", async () => {
+	const previousThreshold = process.env.PI_AUTO_COMPACT_TEST_THRESHOLD;
+	process.env.PI_AUTO_COMPACT_TEST_THRESHOLD = "1";
+
+	try {
+		const runtime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false });
+		const faux = fauxProvider({
+			provider: "shared-runtime",
+			models: [{ id: "shared-1", contextWindow: 400_000 }],
+		});
+		faux.setResponses([fauxAssistantMessage("delegated once")]);
+		runtime.registerNativeProvider(faux.provider);
+		const modelRegistry = new ModelRegistry(runtime);
+		const model = faux.getModel();
+		const handlers = new Map<string, EventHandler[]>();
+		let providerRegistrationCount = 0;
+		const pi = {
+			events: createEventBus(),
+			on(event: string, handler: EventHandler) {
+				const registered = handlers.get(event) ?? [];
+				registered.push(handler);
+				handlers.set(event, registered);
+			},
+			registerCommand() {},
+			registerProvider(providerOrName: Provider | string, config?: ProviderConfig) {
+				providerRegistrationCount += 1;
+				if (typeof providerOrName === "string") {
+					assert.ok(config);
+					runtime.registerProvider(providerOrName, config);
+				} else {
+					runtime.registerNativeProvider(providerOrName);
+				}
+			},
+			unregisterProvider(name: string) {
+				runtime.unregisterProvider(name);
+			},
+		} as unknown as ExtensionAPI;
+		const ctx = {
+			cwd: tmpdir(),
+			model,
+			modelRegistry,
+			isProjectTrusted: () => false,
+			getContextUsage: () => ({ tokens: 10, contextWindow: model.contextWindow, percent: 0 }),
+			ui: { notify() {} },
+		} as unknown as ExtensionContext;
+		const event = {
+			type: "turn_end",
+			message: { role: "assistant", content: [], timestamp: Date.now() },
+			toolResults: [{ toolCallId: "tool-shared" }],
+		};
+
+		autoCompact(pi);
+		const firstTurnEnd = handlers.get("turn_end")?.[0];
+		assert.ok(firstTurnEnd);
+		await firstTurnEnd(event, ctx);
+		const firstWrapper = modelRegistry.getProvider(model.provider);
+		assert.ok(firstWrapper);
+
+		autoCompact(pi);
+		const secondTurnEnd = handlers.get("turn_end")?.[1];
+		assert.ok(secondTurnEnd);
+		await secondTurnEnd(event, ctx);
+		const secondWrapper = modelRegistry.getProvider(model.provider);
+		assert.ok(secondWrapper);
+		assert.notEqual(secondWrapper, firstWrapper);
+		assert.equal(providerRegistrationCount, 2);
+
+		await secondWrapper.streamSimple(model, { systemPrompt: "", messages: [], tools: [] }, {}).result();
+		assert.equal(faux.state.callCount, 1);
+
+		const shutdownHandlers = handlers.get("session_shutdown") ?? [];
+		assert.equal(shutdownHandlers.length, 2);
+		for (const shutdown of shutdownHandlers) {
+			await shutdown({ type: "session_shutdown", reason: "reload" }, ctx);
+		}
+		assert.equal(modelRegistry.getProvider(model.provider), faux.provider);
+		assert.equal(runtime.getRegisteredNativeProvider(model.provider), faux.provider);
+		assert.equal(providerRegistrationCount, 3);
+	} finally {
+		if (previousThreshold === undefined) delete process.env.PI_AUTO_COMPACT_TEST_THRESHOLD;
+		else process.env.PI_AUTO_COMPACT_TEST_THRESHOLD = previousThreshold;
+	}
+});
+
+test("restores named and inherited providers without overwriting a later owner", async () => {
+	const previousThreshold = process.env.PI_AUTO_COMPACT_TEST_THRESHOLD;
+	process.env.PI_AUTO_COMPACT_TEST_THRESHOLD = "1";
+
+	try {
+		const runtime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false });
+		const namedFaux = fauxProvider({
+			provider: "ordinary-named",
+			models: [{ id: "ordinary-1", contextWindow: 400_000 }],
+		});
+		const namedModel = namedFaux.getModel();
+		const namedConfig: ProviderConfig = {
+			name: "Ordinary named provider",
+			baseUrl: namedModel.baseUrl,
+			apiKey: "test-key",
+			api: namedModel.api,
+			models: [namedModel],
+			streamSimple: namedFaux.provider.streamSimple.bind(namedFaux.provider),
+		};
+		runtime.registerProvider(namedModel.provider, namedConfig);
+		const savedNamedConfig = runtime.getRegisteredProviderConfig(namedModel.provider);
+		assert.ok(savedNamedConfig);
+
+		const ownedFaux = fauxProvider({
+			provider: "later-owned",
+			models: [{ id: "owned-1", contextWindow: 400_000 }],
+		});
+		ownedFaux.setResponses([fauxAssistantMessage("foreign wrapper delegated")]);
+		runtime.registerNativeProvider(ownedFaux.provider);
+		const ownedModel = ownedFaux.getModel();
+		const inheritedModel = runtime.getModels("openai")[0];
+		assert.ok(inheritedModel, "the Pi runtime should include its built-in OpenAI provider");
+		const inheritedProvider = runtime.getProvider(inheritedModel.provider);
+		assert.ok(inheritedProvider);
+
+		const modelRegistry = new ModelRegistry(runtime);
+		const handlers = new Map<string, EventHandler[]>();
+		let providerRegistrationCount = 0;
+		let providerUnregistrationCount = 0;
+		const pi = {
+			events: createEventBus(),
+			on(event: string, handler: EventHandler) {
+				const registered = handlers.get(event) ?? [];
+				registered.push(handler);
+				handlers.set(event, registered);
+			},
+			registerCommand() {},
+			registerProvider(providerOrName: Provider | string, config?: ProviderConfig) {
+				providerRegistrationCount += 1;
+				if (typeof providerOrName === "string") {
+					assert.ok(config);
+					runtime.registerProvider(providerOrName, config);
+				} else {
+					runtime.registerNativeProvider(providerOrName);
+				}
+			},
+			unregisterProvider(name: string) {
+				providerUnregistrationCount += 1;
+				runtime.unregisterProvider(name);
+			},
+		} as unknown as ExtensionAPI;
+		autoCompact(pi);
+
+		const contextFor = (model: Model<Api>) =>
+			({
+				cwd: tmpdir(),
+				model,
+				modelRegistry,
+				isProjectTrusted: () => false,
+				getContextUsage: () => ({ tokens: 10, contextWindow: model.contextWindow, percent: 0 }),
+				ui: { notify() {} },
+			}) as unknown as ExtensionContext;
+		const turnEnd = handlers.get("turn_end")?.[0];
+		assert.ok(turnEnd);
+		for (const [index, model] of [namedModel, inheritedModel, ownedModel].entries()) {
+			await turnEnd(
+				{
+					type: "turn_end",
+					message: { role: "assistant", content: [], timestamp: Date.now() },
+					toolResults: [{ toolCallId: `tool-${index}` }],
+				},
+				contextFor(model),
+			);
+		}
+		assert.equal(providerRegistrationCount, 3);
+		assert.equal(runtime.getRegisteredProviderConfig(namedModel.provider), undefined);
+		assert.ok(runtime.getRegisteredNativeProvider(inheritedModel.provider));
+
+		const ownedWrapper = runtime.getProvider(ownedModel.provider);
+		assert.ok(ownedWrapper);
+		const laterProvider: Provider = {
+			...ownedFaux.provider,
+			name: "Later extension wrapper",
+			streamSimple(model, context, options) {
+				return ownedWrapper.streamSimple(model, context, options);
+			},
+		};
+		runtime.registerNativeProvider(laterProvider);
+
+		const shutdown = handlers.get("session_shutdown")?.[0];
+		assert.ok(shutdown);
+		await shutdown({ type: "session_shutdown", reason: "reload" }, contextFor(namedModel));
+
+		assert.deepEqual(runtime.getRegisteredProviderConfig(namedModel.provider), savedNamedConfig);
+		assert.equal(runtime.getRegisteredNativeProvider(namedModel.provider), undefined);
+		assert.equal(runtime.getProvider(ownedModel.provider), laterProvider);
+		assert.equal(runtime.getRegisteredNativeProvider(ownedModel.provider), laterProvider);
+		assert.equal(runtime.getProvider(inheritedModel.provider), inheritedProvider);
+		assert.equal(runtime.getRegisteredNativeProvider(inheritedModel.provider), undefined);
+		assert.equal(runtime.getRegisteredProviderConfig(inheritedModel.provider), undefined);
+		assert.equal(providerRegistrationCount, 4, "only the owned named registration should be restored");
+		assert.equal(providerUnregistrationCount, 1, "the inherited provider should be restored by unregistering");
+
+		const delegatedAfterShutdown = await runtime
+			.streamSimple(
+				ownedModel,
+				{
+					systemPrompt: "",
+					messages: [
+						{
+							role: "toolResult",
+							toolCallId: "tool-2",
+							toolName: "bash",
+							content: [{ type: "text", text: "ok" }],
+							isError: false,
+							timestamp: Date.now(),
+						},
+					],
+					tools: [],
+				},
+				{},
+			)
+			.result();
+		assert.equal(delegatedAfterShutdown.stopReason, "stop", "shutdown must disarm captured stale wrappers");
 	} finally {
 		if (previousThreshold === undefined) delete process.env.PI_AUTO_COMPACT_TEST_THRESHOLD;
 		else process.env.PI_AUTO_COMPACT_TEST_THRESHOLD = previousThreshold;

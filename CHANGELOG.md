@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Preserve complete native provider behavior when installing the ModelRuntime interception wrapper, including OAuth authentication and provider-clone model catalogs.
+- Restore provider registrations after the one-shot interception and on session shutdown without overwriting a provider replaced later by another extension.
+
 ## v0.1.9
 
 - Show dedicated model and thinking progress in Pi's existing compaction spinner, preserving reason-specific labels.
