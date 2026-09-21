@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Deprecate the extension for Pi 0.86 and later, which provide native mid-turn automatic compaction and continuation.
+- Document migration to `compaction.modelOverrides` and `@pinet/model-aware-compaction`.
+
 ## v0.1.9
 
 - Show dedicated model and thinking progress in Pi's existing compaction spinner, preserving reason-specific labels.

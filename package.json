@@ -1,7 +1,7 @@
 {
   "name": "pi-auto-compact",
   "version": "0.1.9",
-  "description": "Configurable proactive native compaction for Pi",
+  "description": "Deprecated: configurable proactive native compaction for Pi 0.85 and earlier",
   "type": "module",
   "license": "MIT",
   "author": "Thomas Mustier",

@@ -1,8 +1,34 @@
 # Pi auto-compact
 
+> [!WARNING]
+> This extension is deprecated and the repository is archived. Pi 0.86 and later provide native mid-turn automatic compaction and continuation. Use Pi's `compaction.modelOverrides` for per-model trigger reserves. If summaries should use a dedicated model, add [`@pinet/model-aware-compaction`](https://www.npmjs.com/package/@pinet/model-aware-compaction) with its proactive trigger disabled.
+
 Pi auto-compact compacts long Pi sessions after a tool turn, then continues the same request. The default threshold is 200,000 estimated tokens, capped at Pi's own compaction limit (`context window - reserved tokens`) for smaller-context models.
 
-## Install
+## Migrate to Pi 0.86
+
+Remove `git:github.com/tmustier/pi-auto-compact` from `packages` and configure Pi directly. Pi triggers compaction at `contextWindow - reserveTokens`, so calculate each reserve from the effective context window shown by `pi --list-models`.
+
+```json
+{
+  "compaction": {
+    "enabled": true,
+    "reserveTokens": 16384,
+    "keepRecentTokens": 20000,
+    "modelOverrides": {
+      "openai-codex/gpt-5.6-sol": {
+        "reserveTokens": 22000
+      }
+    }
+  }
+}
+```
+
+That example compacts a 272,000-token model at about 250,000 estimated tokens. Restart Pi after changing packages or upgrading the runtime. An old `auto-compact.json` file is inert once the package is removed.
+
+## Legacy installation
+
+For Pi 0.85 and earlier only:
 
 ```sh
 pi install git:github.com/tmustier/pi-auto-compact
