@@ -329,9 +329,7 @@ test("intercepts the next ModelRuntime provider request after a tool turn crosse
 		const streamSimple = providerRegistrations[0]?.config.streamSimple;
 		assert.ok(streamSimple, "ModelRuntime provider overlay should supply streamSimple");
 
-		const stream = streamSimple(
-			model,
-			{
+		const transcript = {
 				systemPrompt: "",
 				messages: [
 					{
@@ -344,7 +342,10 @@ test("intercepts the next ModelRuntime provider request after a tool turn crosse
 					},
 				],
 				tools: [],
-			},
+			} as unknown as Parameters<typeof streamSimple>[1];
+		const stream = streamSimple(
+			model,
+			transcript,
 			{},
 		);
 		const result = await stream.result();
